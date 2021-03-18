@@ -2,6 +2,7 @@
 This is the supplementary excel table containing all associations
 
 #E1: Alpha diversity
+
 #E2: Beta diversity
 #E3: Phylum and family associations
 #E4: Pathway associations
