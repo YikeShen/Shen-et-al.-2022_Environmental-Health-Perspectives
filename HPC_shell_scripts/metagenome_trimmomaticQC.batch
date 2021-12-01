@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --time=40:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=50G
+#SBATCH --job-name=geste_trimmomatic
+
+cd /$path/fastqmerge_trim
+
+ls *gz|cut -f 1 -d "_" |uniq|while read line; do java -jar /opt/software/Trimmomatic/0.39-Java-1.8/trimmomatic-0.39.jar \
+PE -phred33 "$line"_R1.fastq.gz "$line"_R2.fastq.gz ../QC_data/"$line"_R1.fastq.gz \
+../QC_data/"$line".qcup_R1.fastq.gz ../QC_data/"$line"_R2.fastq.gz ../QC_data/"$line".qcup_R2.fastq.gz \
+ILLUMINACLIP:/opt/software/Trimmomatic/0.39-Java-1.8/adapters/NexteraPE-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36;done
+                                    
+scontrol show job $SLURM_JOB_ID
+
+

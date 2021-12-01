@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --time=5:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=100G
+#SBATCH --job-name=bowtie2_SampleID
+export PATH=$PATH:/mnt/home/shenyike/miniconda3/bin
+
+cd /$path/metagenome_GESTE2020/GRCh38_noalt_as
+
+bowtie2 -x GRCh38_noalt_as \
+-1 /$path/metagenome_GESTE2020/QC_data/SampleID_R1.fastq.gz \
+-2 /$path/metagenome_GESTE2020/QC_data/SampleID_R2.fastq.gz \
+-S SampleID.sam --threads 28 \
+--un-conc-gz /mnt/ls15/scratch/users/shenyike/metagenome_GESTE2021/fastq_dehost/SampleID.dehost.fq.gz
+
+scontrol show job $SLURM_JOB_ID
