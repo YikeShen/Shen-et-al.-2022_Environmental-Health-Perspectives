@@ -1,0 +1,26 @@
+#!/bin/bash
+#SBATCH --time=24:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=100G
+#SBATCH --job-name=humann_SampleID
+
+export OMP_NUM_THREADS=4
+conda init bash
+export CONDA3PATH=/mnt/home/shenyike/anaconda3
+module load Conda/3
+conda activate biobakery3
+
+cd /$path_to_host_removed_reads
+
+humann_config --update database_folders nucleotide /mnt/home/shenyike/.local/lib/python3.6/site-packages/metaphlan/metaphlan_databases/chocophlan
+
+humann_config --update database_folders protein /mnt/home/shenyike/.local/lib/python3.6/site-packages/metaphlan/metaphlan_databases/uniref
+
+humann_config --update database_folders utility_mapping /mnt/home/shenyike/.local/lib/python3.6/site-packages/metaphlan/metaphlan_databases/utility_mapping
+
+humann -i SampleID_dehost.fastq.gz -o humann_results/humann_SampleID --threads 4
+
+conda deactivate
+
+scontrol show job $SLURM_JOB_ID
