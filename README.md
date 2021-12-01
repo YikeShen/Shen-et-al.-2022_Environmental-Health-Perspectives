@@ -1,5 +1,5 @@
 # Associations of childhood and perinatal blood metals with children’s gut microbiomes in a Canadian gestation cohort
-Yike Shen1,*, Hannah E. Laue2, Martha J. Shrubsole3, Haotian Wu1, Tessa R. Bloomquist1, Annie Larouche4, Kankan Zhao5, Feng Gao6, Amélie Boivin4, Diddier Prada1,8, Darel J. Hunting7, Virginie Gillet4, Larissa Takser4,9, Andrea A. Baccarelli1
+Yike Shen1,*, Hannah E. Laue2, Martha J. Shrubsole3, Haotian Wu1, Tessa R. Bloomquist1, Annie Larouche4, Kankan Zhao5, Feng Gao6, Amélie Boivin4, Diddier Prada1,8, Darel J. Hunting7, Virginie Gillet4, Larissa Takser4,9, Andrea A. Baccarelli1\\
 1Department of Environmental Health Sciences, Columbia University Mailman School of Public Health, New York, New York, USA
 2Department of Epidemiology, Geisel School of Medicine at Dartmouth, Hanover, New Hampshire, USA
 3Department of Medicine, Vanderbilt University School of Medicine, Nashville, Tennessee, USA.
