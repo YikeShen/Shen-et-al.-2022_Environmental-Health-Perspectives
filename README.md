@@ -9,9 +9,13 @@ Yike Shen1,*, Hannah E. Laue2, Martha J. Shrubsole3, Haotian Wu1, Tessa R. Bloom
 7Department of Nuclear Medicine and Radiobiology, Université de Sherbrooke, Sherbrooke, Québec, Canada \
 8Department of Basic Science, Instituto Nacional de Cancerologia, Ciudad de México, México \
 9Departement de Psychiatrie, Faculté de Médecine et des Sciences de la Santé, Université de Sherbrooke, Sherbrooke, Québec, Canada \
-*Address correspondence to: Dr. Yike Shen, Department of Environmental Health Sciences, Columbia University Mailman School of Public Health, 630 W 168th St Room 16-416, New York, NY 10032, USA.; Email: ys3419@cumc.columbia.edu \
+*Address correspondence to: Dr. Yike Shen, Department of Environmental Health Sciences, Columbia University Mailman School of Public Health, 630 W 168th St Room 16-416, New York, NY 10032, USA.; Email: ys3419@cumc.columbia.edu 
 
 Provisional acceptance 11/26/2021
+
+Please refer to "HPC_shell_scripts" for raw sequencing data processing using unix command and batch scripts \
+Please refer to "Downstream_analysis" for R scripts \
+All participants are de-identified
 
 Update: 11/30/2021, repository is currently being updated. 
 
