@@ -12,6 +12,6 @@ bowtie2 -x GRCh38_noalt_as \
 -1 /$path/metagenome_GESTE2020/QC_data/SampleID_R1.fastq.gz \
 -2 /$path/metagenome_GESTE2020/QC_data/SampleID_R2.fastq.gz \
 -S SampleID.sam --threads 28 \
---un-conc-gz /mnt/ls15/scratch/users/shenyike/metagenome_GESTE2021/fastq_dehost/SampleID.dehost.fq.gz
+--un-conc-gz /$path/SampleID.dehost.fq.gz
 
 scontrol show job $SLURM_JOB_ID
