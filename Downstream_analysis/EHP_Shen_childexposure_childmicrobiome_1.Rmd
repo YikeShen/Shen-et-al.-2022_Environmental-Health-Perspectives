@@ -1,0 +1,1816 @@
+---
+title: "EHP Shen Child Exposure Child Microbiome"
+author: "Yike Shen"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+
+## Readme:
+#You can not run this script without metadata, this aims to provide the workflow of our paper and offer pseudo code example for analysis. 
+# Request for data must go through approval with GESTE cohort, after approval I can share the original scripts with participants name and input processed sequence data. 
+#All participant names are de-identified as "PARTICIPANT_ID"; All name of the inputsheets are redacted as "INPUTDATA.csv"
+## End
+
+## Housekeeping
+# install and load all libraries
+```{r setup, include=FALSE}
+#rm(list=ls())
+#install.packages("knitr")
+#install.packages("tidyverse")
+#install.packages("Matrix")
+#install.packages("pheatmap")
+#install.packages("vegan")
+#install.packages("labdsv")
+#install.packages("dendextend")
+#install.packages("ggsci")
+#install.packages("ade4")
+#BiocManager::install("phyloseq")
+#install.packages("corrplot")
+#install.packages("ggpubr")
+
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(Matrix)
+library("readxl")
+library("rmarkdown")
+library(dplyr)
+library(ggplot2)
+library(pheatmap) 
+library(vegan)
+library(RColorBrewer)
+library(permute)
+library(lattice)
+library(labdsv)
+library(dendextend)
+library("ggsci")
+library(ade4)
+library(phyloseq)
+library("ape")
+library("plyr")
+library(scales)
+library(Hmisc)
+library(corrplot)
+library(miscTools)
+library(gtools)
+library("ggpubr")
+library(microbiome)
+library(gridExtra)
+library(Maaslin2)
+
+#check the version of R
+R.version.string
+#"R version 4.0.2 (2020-06-22)"
+```
+
+setwd("/Users/yikeshen/Desktop/GESTEDATA16S")
+
+
+#Step1: Turn data into phyloseq object to calculate alpha diversity
+
+#Processing data, turn into physeq object
+```{r}
+rm(list=ls())
+OTUtableraw <- read_excel("GESTE_OTU.xlsx", sheet = "OTU_Children2021")
+OTUtable <- OTUtableraw[-1,]
+OTUtable <- OTUtable %>% filter(!grepl("Archaea",OTUID)) %>% filter(!grepl("Eukaryota",OTUID))
+OTU <- OTUtable %>% dplyr::select(-"OTUID")
+ROWNAMES <- OTU$FeatureID 
+OTU <- OTU[,-1]
+OTU <- OTU %>% as.matrix()
+row.names(OTU) <- ROWNAMES
+OTU[is.na(OTU)] <- 0
+OTU <- OTU %>% as.matrix()
+colnames(OTU) <- paste("P",colnames(OTU),sep="_")
+
+Taxonomy <- OTUtable %>% 
+  dplyr::select("OTUID")
+
+Taxonomy <- Taxonomy %>%
+  separate("OTUID",into=c("Domain","Phylum","Class","Order","Family","Genus","Species"),sep=";")
+
+TAX <- Taxonomy %>% as.data.frame() %>% 
+  mutate(Domain=gsub("d__","",Domain)) %>% 
+  mutate(Phylum=gsub("p__","",Phylum)) %>% 
+  mutate(Class=gsub("c__","",Class)) %>% 
+  mutate(Order=gsub("o__","",Order)) %>% 
+  mutate(Family=gsub("f__","",Family)) %>% 
+  mutate(Genus=gsub("g__","",Genus)) %>% 
+  mutate(Species=gsub("s__","",Species)) %>% 
+  as.matrix() %>% as.data.frame()
+
+TAX[is.na(TAX)] <- NA
+TAX <- apply(TAX, 2, function(x) gsub("^$|^ $", NA, x))
+TAX <- TAX %>% as.matrix()
+row.names(TAX) <- ROWNAMES
+
+map <- read_excel("GESTE_OTU.xlsx", sheet = "ENV_Children")
+
+SAMPLEIDROWNAMES <- map$SampleID
+map <- map %>% as.matrix()
+row.names(map) <- SAMPLEIDROWNAMES
+row.names(map) <- paste("P",row.names(map),sep="_")
+map <- map[,c(-1,-7)]
+ROANAMESLISTSAMPLESID <- row.names(map)
+
+OTU=otu_table(OTU,taxa_are_rows = TRUE)
+rownames(TAX) <- row.names(OTU)
+TAX=tax_table(TAX)
+map <- map %>% as.data.frame()
+MAP <- sample_data(map)
+
+physeq = merge_phyloseq(OTU, TAX, MAP)
+Tree=rtree(ntaxa(physeq),rooted=TRUE,tip.label = taxa_names(physeq))
+
+physeq = phyloseq(OTU, TAX, MAP,Tree)
+
+```
+
+
+#Processing data, due to outlier, separate phyloseq object for (Mn,Cd,Se)-Beta_physeq object
+```{r}
+OTUtableraw_Mn <- read_excel("GESTE_OTU.xlsx", sheet = "OTU_Children2021")
+OTUtable_Mn <- OTUtableraw_Mn[-1,]
+OTUtable_Mn <- OTUtable_Mn %>% filter(!grepl("Archaea",OTUID)) %>% filter(!grepl("Eukaryota",OTUID))
+OTU_Mn <- OTUtable_Mn %>% dplyr::select(-"OTUID")
+ROWNAMES_Mn <- OTU_Mn$FeatureID 
+OTU_Mn <- OTU_Mn[,-1]
+OTU_Mn <- OTU_Mn %>% as.matrix()
+row.names(OTU_Mn) <- ROWNAMES_Mn
+OTU_Mn[is.na(OTU_Mn)] <- 0
+OTU_Mn <- OTU_Mn %>% as.matrix()
+colnames(OTU_Mn) <- paste("P",colnames(OTU_Mn),sep="_")
+
+Taxonomy_Mn <- OTUtable_Mn %>% 
+  dplyr::select("OTUID")
+
+Taxonomy_Mn <- Taxonomy_Mn %>%
+  separate("OTUID",into=c("Domain","Phylum","Class","Order","Family","Genus","Species"),sep=";")
+
+TAX_Mn <- Taxonomy_Mn %>% as.data.frame() %>% 
+  mutate(Domain=gsub("d__","",Domain)) %>% 
+  mutate(Phylum=gsub("p__","",Phylum)) %>% 
+  mutate(Class=gsub("c__","",Class)) %>% 
+  mutate(Order=gsub("o__","",Order)) %>% 
+  mutate(Family=gsub("f__","",Family)) %>% 
+  mutate(Genus=gsub("g__","",Genus)) %>% 
+  mutate(Species=gsub("s__","",Species)) %>% 
+  as.matrix() %>% as.data.frame()
+
+TAX_Mn[is.na(TAX_Mn)] <- NA
+TAX_Mn <- apply(TAX_Mn, 2, function(x) gsub("^$|^ $", NA, x))
+TAX_Mn <- TAX_Mn %>% as.matrix()
+row.names(TAX_Mn) <- ROWNAMES_Mn
+
+
+map_Mn <- read_excel("GESTE_OTU.xlsx", sheet = "ENV_Children")
+
+SAMPLEIDROWNAMES_Mn <- map_Mn$SampleID
+map_Mn <- map_Mn %>% as.matrix()
+row.names(map_Mn) <- SAMPLEIDROWNAMES_Mn
+row.names(map_Mn) <- paste("P",row.names(map_Mn),sep="_")
+map_Mn <- map_Mn[,c(-1,-7)]
+ROANAMESLISTSAMPLESID_Mn <- row.names(map_Mn)
+
+###Remove the outlier participant
+map_Mn <- map_Mn[!(row.names(map_Mn) %in% "PARTICIPANT_ID"), ]
+######
+
+OTU_Mn=otu_table(OTU_Mn,taxa_are_rows = TRUE)
+rownames(TAX_Mn) <- row.names(OTU_Mn)
+TAX_Mn=tax_table(TAX_Mn)
+map_Mn <- map_Mn %>% as.data.frame()
+MAP_Mn <- sample_data(map_Mn)
+
+physeq_Mn = merge_phyloseq(OTU_Mn, TAX_Mn, MAP_Mn)
+Tree_Mn=rtree(ntaxa(physeq_Mn),rooted=TRUE,tip.label = taxa_names(physeq_Mn))
+
+physeq_Mn = phyloseq(OTU_Mn, TAX_Mn, MAP_Mn,Tree_Mn)
+```
+
+
+#check sequence rarefaction curve
+```{r}
+rarecurve(t(otu_table(physeq)), step=50, cex=0.5)
+```
+
+#Alpha Diversity calculation
+```{r}
+#BiocManager::install("microbiome")
+library(microbiome)
+AlphaEvenness <- evenness(physeq, 'pielou')
+AlphaRichness <- alpha(physeq,'shannon')
+ALPHANEW <- cbind(map,AlphaRichness,AlphaEvenness)
+
+#table1::table1(~., data = ALPHANEW)
+```
+
+
+#Step2, cleanup metadata 
+## Data tidying 
+```{r}
+GESTERAW <- read.csv("INPUTDATA.csv")
+ChildMetalRaw <- GESTERAW[,1:6]
+
+#more covariates from the other datasheet
+Covariates <- read.csv("INPUTDATA.csv")
+Childrencovariates <- Covariates[,c(1:14,198)]
+Childrencovariates <- Childrencovariates[-1,-1]
+Childrencovariates <- Childrencovariates %>% dplyr::rename(medication_c=medication)
+GESTERAWwcovaraites <- cbind(GESTERAW,Childrencovariates)
+
+Socio <- GESTERAWwcovaraites %>% select(record_id,cadmium,manganese,mercury,lead, selenium,child_age,sexe_enfan,revenufami,ecolespeci,allaite,proxim_ind,ant_ch_bmi_imp,medication_c,ga_wks_bb)
+
+###TEST If there is correlation between two incomes time###
+INCOMEDELIVERY <- Covariates[-1,]$revenu_delivery
+INCOMEY6 <- Socio$revenufami
+INCOMECOR <- cbind(INCOMEDELIVERY,INCOMEY6) %>% as.data.frame()
+INCOMECOR$INCOMEDELIVERY <- as.numeric(INCOMECOR$INCOMEDELIVERY)
+INCOMECOR$INCOMEY6 <- as.numeric(INCOMECOR$INCOMEY6)
+
+#INCOMECOR <- INCOMECOR[complete.cases(INCOMECOR[,1:2]),]
+#cor.test(INCOMECOR$INCOMEDELIVERY, INCOMECOR$INCOMEY6, method=c("pearson"))
+#Yes, therefore impute missing income from each other. 
+
+#############
+Socioprocessing <- Socio[complete.cases(Socio[ , 2:6]),]
+Socioprocessing <- Socioprocessing[,-c(2:6)]
+row.names(Socioprocessing) <- Socioprocessing$record_id
+Socioprocessing <- Socioprocessing %>% as.tibble() %>%
+  dplyr::rename(Sex=sexe_enfan) %>% 
+  dplyr::rename(Special_school=ecolespeci) %>% 
+  dplyr::rename(Breastfeed=allaite) %>% 
+  dplyr::rename(Family_income_Y6=revenufami) %>% 
+  dplyr::rename(Children_age=child_age) %>% 
+  dplyr::rename(Proximity_industry=proxim_ind) %>% 
+  dplyr::rename(Gestational_age=ga_wks_bb)
+
+Socioprocessing$ant_ch_bmi_imp <- as.numeric(Socioprocessing$ant_ch_bmi_imp)
+Socioprocessing$medication_c <- as.numeric(Socioprocessing$medication_c)
+
+Socioprocessing[X,Y] <- NUMBER #PARTICIPANT_ID, family income imputation_redacted
+Socioprocessing[X,Y] <- NUMBER #PARTICIPANT_ID,family income imputation_redacted
+
+#bad naming, but to bind alpha diversity and metadata together
+Correlationscreening <- cbind(ALPHANEW,Socioprocessing)
+Correlationscreening <- Correlationscreening %>% select(-record_id)
+Correlationscreening <- Correlationscreening %>% as.matrix()
+Correlationscreening[35,13] <- 0 #impute NA to noproximity for the population
+
+dataframewithcovariates <- Correlationscreening %>%as.data.frame() %>%  select(Cd_c,Mn_c,Hg_c,Pb_c,Se_c,diversity_shannon,pielou,Breastfeed,Gestational_age,Family_income_Y6,Sex)
+
+#below summary statistics
+dataframewithcovariates$Sex[Socioprocessing$Sex == "1"] <- 'Female'
+dataframewithcovariates$Sex[Socioprocessing$Sex == "2"] <- 'Male'
+
+dataframewithcovariates$Special_school[Socioprocessing$Special_school == "1"] <- 'Yes'
+dataframewithcovariates$Special_school[Socioprocessing$Special_school == "0"] <- 'No'
+
+dataframewithcovariates$Breastfeed[dataframewithcovariates$Breastfeed == "1"] <- 'Yes'
+dataframewithcovariates$Breastfeed[dataframewithcovariates$Breastfeed == "0"] <- 'No'
+
+dataframewithcovariates[,1:7] <- lapply(dataframewithcovariates[,1:7], function(x) as.numeric(as.character(x)))
+dataframewithcovariates$Family_income_Y6 <- as.numeric(dataframewithcovariates$Family_income_Y6)
+dataframewithcovariates$Gestational_age <- as.numeric(dataframewithcovariates$Gestational_age)
+```
+
+
+#Table1: Summary statistics
+```{r}
+#Note, only run this for summary, clean restart afterwards
+
+GESTERAW <- read.csv("INPUTDATA.csv")
+ChildMetalRaw <- GESTERAW[,1:6]
+
+#more covariates from the other datasheet
+Covariates <- read.csv("INPUTDATA.csv")
+Childrencovariates <- Covariates[,c(1:14,198)]
+Childrencovariates <- Childrencovariates[-1,-1]
+Childrencovariates <- Childrencovariates %>% dplyr::rename(medication_c=medication)
+GESTERAWwcovaraites <- cbind(GESTERAW,Childrencovariates)
+
+
+Socio <- GESTERAWwcovaraites %>% select(record_id,child_age,sexe_enfan,revenufami,ecolespeci,allaite,proxim_ind,ant_ch_bmi_imp,medication_c,ga_wks_bb)
+Socioprocessing <- Socio
+
+row.names(Socioprocessing) <- Socioprocessing$record_id
+Socioprocessing <- Socioprocessing %>% as.tibble() %>%
+  dplyr::rename(Sex=sexe_enfan) %>% 
+  dplyr::rename(Special_school=ecolespeci) %>% 
+  dplyr::rename(Breastfeed=allaite) %>% 
+  dplyr::rename(Family_income_Y6=revenufami) %>% 
+  dplyr::rename(Children_age=child_age) %>% 
+  dplyr::rename(Proximity_industry=proxim_ind) %>% 
+  dplyr::rename(Gestational_age=ga_wks_bb)
+
+Socioprocessing$ant_ch_bmi_imp <- as.numeric(Socioprocessing$ant_ch_bmi_imp)
+Socioprocessing$medication_c <- as.numeric(Socioprocessing$medication_c)
+
+#Partic
+Socioprocessing[X,Y] <- NUMBER #PARTICIPANT_ID, family income imputation X at delivery
+Socioprocessing[X,Y] <- NUMBER #PARTICIPANT_ID,family income imputation X at delivery
+
+dataframewithcovariates <- Socioprocessing %>%as.data.frame() %>%  select(Breastfeed,Gestational_age,Family_income_Y6,Sex)
+
+maternalvar<- read.csv("INPUTDATA.csv")
+
+ALLVARIABLE <- cbind(dataframewithcovariates[,c(1,3)],maternalvar[,-1],GESTERAWwcovaraites[,2:6])
+
+ALLVARIABLE$Delivery_mode[ALLVARIABLE$Delivery_mode == "1"] <- 'Vaginal'
+ALLVARIABLE$Delivery_mode[ALLVARIABLE$Delivery_mode == "2"] <- 'C-Section'
+
+ALLVARIABLE$Breastfeed[ALLVARIABLE$Breastfeed == "1"] <- 'Yes'
+ALLVARIABLE$Breastfeed[ALLVARIABLE$Breastfeed == "0"] <- 'No'
+
+ALLVARIABLE <- ALLVARIABLE[complete.cases(ALLVARIABLE[ , 11:15]),]
+
+table1::table1(~ ., data = ALLVARIABLE)
+
+GESTERAW2 <- read.csv("INPUTDATA.csv")
+GESTERAW2 <- GESTERAW2[2:7]
+
+ALLVARIABLEMaternal <- cbind(dataframewithcovariates[,c(1,3)],maternalvar[,-1],GESTERAW2[,-1])
+ALLVARIABLEMaternal$Delivery_mode[ALLVARIABLEMaternal$Delivery_mode == "1"] <- 'Vaginal'
+ALLVARIABLEMaternal$Delivery_mode[ALLVARIABLEMaternal$Delivery_mode == "2"] <- 'C-Section'
+
+ALLVARIABLEMaternal$Breastfeed[ALLVARIABLEMaternal$Breastfeed == "1"] <- 'Yes'
+ALLVARIABLEMaternal$Breastfeed[ALLVARIABLEMaternal$Breastfeed == "0"] <- 'No'
+
+ALLVARIABLEMaternal <- ALLVARIABLEMaternal[complete.cases(ALLVARIABLEMaternal[ , 11:15]),]
+ALLVARIABLEMaternal <- ALLVARIABLEMaternal[!ALLVARIABLEMaternal$SampleID %in% "2336", ]
+
+table1::table1(~ ., data = ALLVARIABLEMaternal)
+###OUTPUT both child exposure-child microbiome & perinatal exposure-child microbiome for the convenience of combining Table1
+#Exclude childhood metal at this point, metals process next. 
+
+```
+
+
+###Diet & Antibiotics
+```{r}
+DIET_RAW <- read_excel("EHP_dietanti.xlsx", sheet = "6Y_supp")
+
+DIET_Processing <- match_df(DIET_RAW,Socioprocessing, on ="record_id")
+
+DIET_Processing <- DIET_Processing %>% select(record_id,medication,autremedic,intoleranc,troubles_d)
+DIET_Processing <- DIET_Processing %>%
+  dplyr::rename(Regular_medication=medication) %>% 
+  dplyr::rename(Natural_medication=autremedic) %>% 
+  dplyr::rename(Food_intolerance=intoleranc) %>% 
+  dplyr::rename(Digestion_issues=troubles_d)
+
+DIET_Processing$Regular_medication[DIET_Processing$Regular_medication == "1"] <- 'Yes'
+DIET_Processing$Regular_medication[DIET_Processing$Regular_medication == "0"] <- 'No'
+
+DIET_Processing$Natural_medication[DIET_Processing$Natural_medication == "1"] <- 'Yes'
+DIET_Processing$Natural_medication[DIET_Processing$Natural_medication == "0"] <- 'No'
+
+DIET_Processing$Food_intolerance[DIET_Processing$Food_intolerance == "1"] <- 'Yes'
+DIET_Processing$Food_intolerance[DIET_Processing$Food_intolerance == "0"] <- 'No'
+#2
+DIET_Processing$Food_intolerance[DIET_Processing$Food_intolerance == "2"] <- 'No'
+#NA
+DIET_Processing[66,4] <- 'No'
+
+DIET_Processing$Digestion_issues[DIET_Processing$Digestion_issues == "1"] <- 'Yes'
+DIET_Processing$Digestion_issues[DIET_Processing$Digestion_issues == "0"] <- 'No'
+#PARTICIPANT_ID_digestive disorder
+DIET_Processing[11,5] <- "Yes"
+DIET_Processing$Digestion_issues[DIET_Processing$Digestion_issues == "2"] <- 'No'
+#NAs
+DIET_Processing[4,5] <- "No"
+DIET_Processing[66,5] <- "No"
+
+###YEAR8 inference
+DIET_Y8_RAW <- read_excel("EHP_dietanti.xlsx", sheet = "8Y_supp")
+#vegetarian/vegan all No,ffq2___2,ffq2___3
+#crohn disease or ulcerative colitis all NO
+#alim_type, type of diet, too many missing 7/85 entered
+#alim_probio, probiotics, too many missing 7/85 entered
+#antibio_pharma, taken last year before GESTE VISIT, too many missing, too far. 
+#Use 3 months before antibiotis information. 
+#digestive (digest) and food intolerance (intol)in Y6, doesn't need Y8.
+DIET_Y8_Processing <- DIET_Y8_RAW %>% select(record_id,antibio,colon,ffq2___1,ffq25)
+
+#some eats everything diet misentered
+DIET_Y8_Processing <- DIET_Y8_Processing[rowSums(is.na(DIET_Y8_Processing)) != 3, ]
+
+#summary(count(DIET_Y8_Processing))
+
+DIET_Y8_Processing <- match_df(DIET_Y8_Processing,Socioprocessing, on ="record_id")
+Socioprocessing_Y8 <- match_df(Socioprocessing,DIET_Y8_Processing, on ="record_id")
+
+DIET_Y8_Processing <- DIET_Y8_Processing %>% 
+  dplyr::rename(Antibiotics_3mon=antibio) %>% 
+  dplyr::rename(IBD=colon) %>% 
+  dplyr::rename(Eatall=ffq2___1) %>% 
+  dplyr::rename(Yogurtfreq=ffq25)
+
+DIET_Y8_Processing$Antibiotics_3mon[DIET_Y8_Processing$Antibiotics_3mon == "1"] <- 'Yes'
+DIET_Y8_Processing$Antibiotics_3mon[DIET_Y8_Processing$Antibiotics_3mon == "0"] <- 'No'
+#PARTICIPANT_ID NA
+DIET_Y8_Processing[38,2] <- 'No'
+DIET_Y8_Processing[17,2] <- 'No'
+
+DIET_Y8_Processing$IBD[DIET_Y8_Processing$IBD == "1"] <- 'Yes'
+DIET_Y8_Processing$IBD[DIET_Y8_Processing$IBD == "2"] <- 'No'
+#PARTICIPANT_ID NA
+DIET_Y8_Processing[38,3] <- 'No'
+DIET_Y8_Processing[17,3] <- 'No'
+
+DIET_Y8_Processing$Eatall[DIET_Y8_Processing$Eatall == "1"] <- 'Yes'
+DIET_Y8_Processing$Eatall[DIET_Y8_Processing$Eatall == "0"] <- 'No'
+
+#summary(DIET_Y8_Processing$Yogurtfreq)
+#NA impute with median 4 times
+DIET_Y8_Processing[37,5] <- 4
+
+table1::table1(~ ., data = DIET_Y8_Processing[,-1])
+
+#DIET_Processing <- cbind(dataframewithcovariates,DIET_Processing)
+```
+
+
+#Covariate screening (Table S3)
+```{r}
+Socioprocessing_forcov <- Socioprocessing %>% select(Children_age,Proximity_industry,ant_ch_bmi_imp,medication_c)
+
+Covariate_df <- cbind(dataframewithcovariates,Socioprocessing_forcov,DIET_Processing)
+Covariate_df <- Covariate_df %>% as.data.frame()
+Covariate_df <- Covariate_df %>%
+  dplyr::rename(Children_bmi=ant_ch_bmi_imp)
+
+Covariate_df$Proximity_industry[Covariate_df$Proximity_industry == "1"] <- 'Yes'
+Covariate_df$Proximity_industry[Covariate_df$Proximity_industry == "0"] <- 'No'
+
+summary(shanBreastfeed <- lm(diversity_shannon ~ Breastfeed, data=Covariate_df))
+summary(shanGestational_age <- lm(diversity_shannon ~ Gestational_age, data=Covariate_df))
+summary(shanFamily_income_Y6 <- lm(diversity_shannon ~ Family_income_Y6, data=Covariate_df))
+summary(shanSex <- lm(diversity_shannon ~ Sex, data=Covariate_df))
+summary(shanSpecial_school <- lm(diversity_shannon ~ Special_school, data=Covariate_df))
+summary(shanChildren_age <- lm(diversity_shannon ~ Children_age, data=Covariate_df))
+summary(shanProximity_industry <- lm(diversity_shannon ~ Proximity_industry, data=Covariate_df))
+summary(shanChildren_bmi <- lm(diversity_shannon ~ Children_bmi, data=Covariate_df))
+summary(shanChildren_Regularmedication <- lm(diversity_shannon ~ Regular_medication, data=Covariate_df))
+summary(shanChildren_Natural_medication <- lm(diversity_shannon ~ Natural_medication, data=Covariate_df))
+summary(shanChildren_Food_intolerance <- lm(diversity_shannon ~ Food_intolerance, data=Covariate_df))
+summary(shanChildren_Digestion_issues <- lm(diversity_shannon ~ Digestion_issues, data=Covariate_df))
+
+summary(pielouBreastfeed <- lm(pielou ~ Breastfeed, data=Covariate_df))
+summary(pielouGestational_age <- lm(pielou ~ Gestational_age, data=Covariate_df))
+summary(pielouFamily_income_Y6 <- lm(pielou ~ Family_income_Y6, data=Covariate_df))
+summary(pielouSex <- lm(pielou ~ Sex, data=Covariate_df))
+summary(pielouSpecial_school <- lm(pielou ~ Special_school, data=Covariate_df))
+summary(pielouChildren_age <- lm(pielou ~ Children_age, data=Covariate_df))
+summary(pielouProximity_industry <- lm(pielou ~ Proximity_industry, data=Covariate_df))
+summary(pielouChildren_bmi <- lm(pielou ~ Children_bmi, data=Covariate_df))
+summary(pielouChildren_Regularmedication <- lm(pielou ~ Regular_medication, data=Covariate_df))
+summary(pielouChildren_Natural_medication <- lm(pielou ~ Natural_medication, data=Covariate_df))
+summary(pielouChildren_Food_intolerance <- lm(pielou ~ Food_intolerance, data=Covariate_df))
+summary(pielouChildren_Digestion_issues <- lm(pielou ~ Digestion_issues, data=Covariate_df))
+
+
+CovarFig <- data.frame(DiversityMatrix = factor(),
+                       Covariates = factor(),
+                       Estimate = numeric(),
+                       p_value = numeric(),
+                       stringsAsFactors=FALSE)
+
+CovarFig[1:24,] <- NA
+CovarFig$DiversityMatrix <- rep(c("Shannon","Pielou"))
+
+CovarFig$Covariates <- c("Breastfeed","Breastfeed","Gestational_age","Gestational_age","Family_income_Y6","Family_income_Y6","Sex","Sex","Special_school","Special_school","Children_age","Children_age","Proximity_industry","Proximity_industry","Children_bmi","Children_bmi","Children_Regularmedication","Children_Regularmedication","Children_Natural_medication","Children_Natural_medication","Food_intolerance","Food_intolerance","Digestion_issues","Digestion_issues")
+
+CovarFig$p_value[1] <- coef(summary(shanBreastfeed))["BreastfeedYes","Pr(>|t|)"]
+CovarFig$p_value[2] <- coef(summary(pielouBreastfeed))["BreastfeedYes","Pr(>|t|)"]
+CovarFig$p_value[3] <- coef(summary(shanGestational_age))["Gestational_age","Pr(>|t|)"]
+CovarFig$p_value[4] <- coef(summary(pielouGestational_age))["Gestational_age","Pr(>|t|)"]
+CovarFig$p_value[5] <- coef(summary(shanFamily_income_Y6))["Family_income_Y6","Pr(>|t|)"]
+CovarFig$p_value[6] <- coef(summary(pielouFamily_income_Y6))["Family_income_Y6","Pr(>|t|)"]
+CovarFig$p_value[7] <- coef(summary(shanSex))["SexMale","Pr(>|t|)"]
+CovarFig$p_value[8] <- coef(summary(pielouSex))["SexMale","Pr(>|t|)"]
+CovarFig$p_value[9] <- coef(summary(shanSpecial_school))["Special_schoolYes","Pr(>|t|)"]
+CovarFig$p_value[10] <- coef(summary(pielouSpecial_school))["Special_schoolYes","Pr(>|t|)"]
+CovarFig$p_value[11] <- coef(summary(shanChildren_age))["Children_age","Pr(>|t|)"]
+CovarFig$p_value[12] <- coef(summary(pielouChildren_age))["Children_age","Pr(>|t|)"]
+CovarFig$p_value[13] <- coef(summary(shanProximity_industry))["Proximity_industryYes","Pr(>|t|)"]
+CovarFig$p_value[14] <- coef(summary(pielouProximity_industry))["Proximity_industryYes","Pr(>|t|)"]
+CovarFig$p_value[15] <- coef(summary(shanChildren_bmi))["Children_bmi","Pr(>|t|)"]
+CovarFig$p_value[16] <- coef(summary(pielouChildren_bmi))["Children_bmi","Pr(>|t|)"]
+CovarFig$p_value[17] <- coef(summary(shanChildren_Regularmedication))["Regular_medicationYes","Pr(>|t|)"]
+CovarFig$p_value[18] <- coef(summary(pielouChildren_Regularmedication))["Regular_medicationYes","Pr(>|t|)"]
+CovarFig$p_value[19] <- coef(summary(shanChildren_Natural_medication))["Natural_medicationYes","Pr(>|t|)"]
+CovarFig$p_value[20] <- coef(summary(pielouChildren_Natural_medication))["Natural_medicationYes","Pr(>|t|)"]
+CovarFig$p_value[21] <- coef(summary(shanChildren_Food_intolerance))["Food_intoleranceYes","Pr(>|t|)"]
+CovarFig$p_value[22] <- coef(summary(pielouChildren_Food_intolerance))["Food_intoleranceYes","Pr(>|t|)"]
+CovarFig$p_value[23] <- coef(summary(shanChildren_Digestion_issues))["Digestion_issuesYes","Pr(>|t|)"]
+CovarFig$p_value[24] <- coef(summary(pielouChildren_Digestion_issues))["Digestion_issuesYes","Pr(>|t|)"]
+
+
+CovarFig$Estimate[1] <- coef(summary(shanBreastfeed))["BreastfeedYes","Estimate"]
+CovarFig$Estimate[2] <- coef(summary(pielouBreastfeed))["BreastfeedYes","Estimate"]
+CovarFig$Estimate[3] <- coef(summary(shanGestational_age))["Gestational_age","Estimate"]
+CovarFig$Estimate[4] <- coef(summary(pielouGestational_age))["Gestational_age","Estimate"]
+CovarFig$Estimate[5] <- coef(summary(shanFamily_income_Y6))["Family_income_Y6","Estimate"]
+CovarFig$Estimate[6] <- coef(summary(pielouFamily_income_Y6))["Family_income_Y6","Estimate"]
+CovarFig$Estimate[7] <- coef(summary(shanSex))["SexMale","Estimate"]
+CovarFig$Estimate[8] <- coef(summary(pielouSex))["SexMale","Estimate"]
+CovarFig$Estimate[9] <- coef(summary(shanSpecial_school))["Special_schoolYes","Estimate"]
+CovarFig$Estimate[10] <- coef(summary(pielouSpecial_school))["Special_schoolYes","Estimate"]
+CovarFig$Estimate[11] <- coef(summary(shanChildren_age))["Children_age","Estimate"]
+CovarFig$Estimate[12] <- coef(summary(pielouChildren_age))["Children_age","Estimate"]
+CovarFig$Estimate[13] <- coef(summary(shanProximity_industry))["Proximity_industryYes","Estimate"]
+CovarFig$Estimate[14] <- coef(summary(pielouProximity_industry))["Proximity_industryYes","Estimate"]
+CovarFig$Estimate[15] <- coef(summary(shanChildren_bmi))["Children_bmi","Estimate"]
+CovarFig$Estimate[16] <- coef(summary(pielouChildren_bmi))["Children_bmi","Estimate"]
+CovarFig$Estimate[17] <- coef(summary(shanChildren_Regularmedication))["Regular_medicationYes","Estimate"]
+CovarFig$Estimate[18] <- coef(summary(pielouChildren_Regularmedication))["Regular_medicationYes","Estimate"]
+CovarFig$Estimate[19] <- coef(summary(shanChildren_Natural_medication))["Natural_medicationYes","Estimate"]
+CovarFig$Estimate[20] <- coef(summary(pielouChildren_Natural_medication))["Natural_medicationYes","Estimate"]
+CovarFig$Estimate[21] <- coef(summary(shanChildren_Food_intolerance))["Food_intoleranceYes","Estimate"]
+CovarFig$Estimate[22] <- coef(summary(pielouChildren_Food_intolerance))["Food_intoleranceYes","Estimate"]
+CovarFig$Estimate[23] <- coef(summary(shanChildren_Digestion_issues))["Digestion_issuesYes","Estimate"]
+CovarFig$Estimate[24] <- coef(summary(pielouChildren_Digestion_issues))["Digestion_issuesYes","Estimate"]
+
+```
+
+# Data tidying for children metals (Table S1)
+```{r}
+# Look at data distribution
+# Impute ND to LOD/sqrt(2)
+ChildMetalprocess <- na.omit(ChildMetalRaw)
+
+#Impute ND to DL/sqrt(2)
+##############Cadmium############
+#Cd=0.9/sqrt(2)=0.6363961 (0.64)
+#Cd=0.4/sqrt(2)=0.2828427 (0.28)
+Cdhistogram <- ggplot(ChildMetalprocess, aes(x=cadmium)) + geom_histogram(stat="count",colour="black", fill="black")+labs(x="Cadmium Concentration (nmol/L)", y="Count") +
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))
+Cdhistogram
+
+Metalimpute <- ChildMetalprocess
+Metalimpute$cadmium[Metalimpute$cadmium == "<0.9"] <- '0.64'
+Metalimpute$cadmium[Metalimpute$cadmium == "<0.4"] <- '0.28'
+Metalimpute$cadmium <- as.numeric(Metalimpute$cadmium)
+Metalimpute$cadmium <- as.numeric(Metalimpute$cadmium)
+
+Cddensity <- ggplot(Metalimpute, aes(x=cadmium)) + theme_bw()+
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666")+ggtitle("Cd")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Cadmium Concentration (nmol/L)", y="Cd")
+Cddensity
+
+Cdhistogramimputed <- ggplot(Metalimpute, aes(x=cadmium)) + geom_histogram(stat="count",colour="black", fill="black")+labs(x="Cadmium Concentration (nmol/L)", y="Count") +ggtitle("Imputed LOD/sqrt(2)")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))
+Cdhistogramimputed
+
+#############Mercury#################
+#Hg=2/sqrt(2)= 1.414214
+#Hg=0.5/sqrt(2)=0.3535534
+Hghistogram <- ggplot(ChildMetalprocess, aes(x=mercury)) + geom_histogram(stat="count",colour="black", fill="black")+labs(x="Mercury Concentration (nmol/L)", y="Count") +
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 45))
+Hghistogram
+
+Metalimpute$mercury[Metalimpute$mercury == "<2"] <- '1.4'
+Metalimpute$mercury[Metalimpute$mercury == "<0.5"] <- '0.35'
+Metalimpute$mercury <- as.numeric(Metalimpute$mercury)
+#Metalimpute$mercury[Metalimpute$mercury<= 2] <- '1.4'
+Metalimpute$mercury <- as.numeric(Metalimpute$mercury)
+
+Hghistogramimputed <- ggplot(Metalimpute, aes(x=mercury)) + geom_histogram(stat="count",colour="black", fill="black")+labs(x="Mercury Concentration (nmol/L)", y="Count") +ggtitle("Imputed LOD/sqrt(2)")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))
+Hghistogramimputed
+
+Hgdensity <- ggplot(Metalimpute, aes(x=mercury)) + theme_bw()+
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666")+ggtitle("Hg")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Mercury Concentration (nmol/L)", y="Density")
+Hgdensity
+
+
+Metalimpute$manganese <- as.numeric(Metalimpute$manganese)
+Mndensity <- ggplot(Metalimpute, aes(x=manganese)) + theme_bw()+
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Mn")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Manganese Concentration (nmol/L)", y="Density")
+Mndensity
+
+Metalimpute$lead <- as.numeric(Metalimpute$lead)
+Pbdensity <- ggplot(Metalimpute, aes(x=lead)) + theme_bw()+
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Pb")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Lead Concentration (umol/L)", y="Density")
+Pbdensity
+
+Metalimpute$selenium <- as.numeric(Metalimpute$selenium)
+Sedensity <- ggplot(Metalimpute, aes(x=selenium)) + theme_bw()+
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Se")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Selenium Concentration (umol/L)", y="Density")
+Sedensity
+
+#write.csv(Metalimpute, file = "ChildMetalcontinuous.csv")
+grid.arrange(Cddensity,Mndensity,Hgdensity,Pbdensity,Sedensity,nrow=3
+                               ,top="Metal concentrations density plot")
+
+#install.packages("qwraps2")
+library(qwraps2)
+options(qwraps2_markup = "markdown")
+#summary_table(Metalimpute[,-1])
+```
+
+
+#Two metadata sets for outlier removed or not removed
+```{r}
+#remove one outliers for Mn,Cd,Se
+dataframewithcovariates_Mn <- dataframewithcovariates
+dataframewithcovariates_Mn <- dataframewithcovariates_Mn[!(row.names(dataframewithcovariates_Mn) %in% "PARTICIPANT_ID"), ]
+```
+
+
+#Alpha diversity index distribution
+```{r}
+ALPHANEW$diversity_shannon <- scale(ALPHANEW$diversity_shannon)
+Shannondensity <- ggplot(ALPHANEW, aes(x=diversity_shannon)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Alpha Diversity Density Plot - Shannon")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Shannon Diversity", y="Count")
+
+Shannondensity
+
+ALPHANEW$pielou <- scale(ALPHANEW$pielou)
+Pieloudensity <- ggplot(ALPHANEW, aes(x=pielou)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Alpha Diversity Density Plot - Pielou")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Pielou Evenness", y="Count")
+
+Pieloudensity
+
+grid.arrange(Shannondensity,Pieloudensity)
+```
+
+
+#Step3: Alpha diversity associations (Figure 2, Table S4)
+```{r}
+#install.packages("ggpmisc")
+library(ggpmisc)
+
+#shannonrichness
+summary(shanCd <- lm(diversity_shannon ~ Cd_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn))
+par(mfrow=c(2,2))
+plot(shanCd,which=1:4,main="regression diagnose_Cd_c~Shannon")
+
+
+summary(shanMn <- lm(diversity_shannon ~ Mn_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn))
+par(mfrow=c(2,2))
+plot(shanMn,which=1:4,main="regression diagnose_Mn_c~Shannon")
+
+summary(shanHg <- lm(diversity_shannon ~ Hg_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates))
+par(mfrow=c(2,2))
+plot(shanHg,which=1:4,main="regression diagnose_Hg_c~Shannon")
+
+
+summary(shanPb <- lm(diversity_shannon ~ Pb_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates))
+par(mfrow=c(2,2))
+plot(shanPb,which=1:4,main="regression diagnose_Pb_c~Shannon")
+
+
+summary(shanSe <- lm(diversity_shannon ~ Se_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn))
+par(mfrow=c(2,2))
+plot(shanSe,which=1:4,main="regression diagnose_Se_c~Shannon")
+
+
+#pielouevenness
+summary(piCd <- lm(pielou ~ Cd_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn))
+par(mfrow=c(2,2))
+plot(piCd,which=1:4,main="regression diagnose_Cd_c~Pielou")
+
+summary(piMn <- lm(pielou ~ Mn_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn))
+par(mfrow=c(2,2))
+plot(piMn,which=1:4,main="regression diagnose_Mn_c~Pielou")
+
+summary(piHg <- lm(pielou ~ Hg_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates))
+par(mfrow=c(2,2))
+plot(piHg,which=1:4,main="regression diagnose_Hg_c~Pielou")
+
+summary(piPb <- lm(pielou ~ Pb_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates))
+par(mfrow=c(2,2))
+plot(piPb,which=1:4,main="regression diagnose_Pb_c~Pielou")
+
+summary(piSe <- lm(pielou ~ Se_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn))
+par(mfrow=c(2,2))
+plot(piSe,which=1:4,main="regression diagnose_Se_c~Pielou")
+
+AlphaFig <- data.frame(Method = factor(),
+                       Exposure = factor(),
+                       beta = numeric(),
+                       se = numeric(),
+                       ci_low=numeric(),
+                       ci_high=numeric(),
+                       pval=numeric(),
+                       FDR_qval=numeric(),
+                       stringsAsFactors=FALSE)
+
+AlphaFig[1:10,] <- NA
+AlphaFig$Method <- rep(c("Shannon","Pielou"))
+AlphaFig$Method <- factor(AlphaFig$Method, levels = c("Shannon", "Pielou"))
+
+AlphaFig$Exposure <- c("Cd (nmol/L)","Cd (nmol/L)","Mn (nmol/L)","Mn (nmol/L)","Hg (nmol/L)","Hg (nmol/L)","Pb (umol/L)","Pb (umol/L)","Se (umol/L)","Se (umol/L)")
+
+AlphaFig$beta[1] <- shanCd$coefficients[2]
+AlphaFig$se[1] <- coef(summary(shanCd))[2, "Std. Error"]
+AlphaFig$pval[1] <- coef(summary(shanCd))[2, "Pr(>|t|)"]
+AlphaFig$beta[2] <- piCd$coefficients[2]
+AlphaFig$se[2] <- coef(summary(piCd))[2, "Std. Error"]
+AlphaFig$pval[2] <- coef(summary(piCd))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[3] <- shanMn$coefficients[2]
+AlphaFig$se[3] <- coef(summary(shanMn))[2, "Std. Error"]
+AlphaFig$pval[3] <- coef(summary(shanMn))[2, "Pr(>|t|)"]
+AlphaFig$beta[4] <- piMn$coefficients[2]
+AlphaFig$se[4] <- coef(summary(piMn))[2, "Std. Error"]
+AlphaFig$pval[4] <- coef(summary(piMn))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[5] <- shanHg$coefficients[2]
+AlphaFig$se[5] <- coef(summary(shanHg))[2, "Std. Error"]
+AlphaFig$pval[5] <- coef(summary(shanHg))[2, "Pr(>|t|)"]
+AlphaFig$beta[6] <- piHg$coefficients[2]
+AlphaFig$se[6] <- coef(summary(piHg))[2, "Std. Error"]
+AlphaFig$pval[6] <- coef(summary(piHg))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[7] <- shanPb$coefficients[2]
+AlphaFig$se[7] <- coef(summary(shanPb))[2, "Std. Error"] #sigbreastfeed
+AlphaFig$pval[7] <- coef(summary(shanPb))[2, "Pr(>|t|)"]
+AlphaFig$beta[8] <- piPb$coefficients[2]
+AlphaFig$se[8] <- coef(summary(piPb))[2, "Std. Error"]
+AlphaFig$pval[8] <- coef(summary(piPb))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[9] <- shanSe$coefficients[2]
+AlphaFig$se[9] <- coef(summary(shanSe))[2, "Std. Error"]#sigbreastfeed
+AlphaFig$pval[9] <- coef(summary(shanSe))[2, "Pr(>|t|)"]
+AlphaFig$beta[10] <- piSe$coefficients[2]
+AlphaFig$se[10] <- coef(summary(piSe))[2, "Std. Error"]
+AlphaFig$pval[10] <- coef(summary(piSe))[2, "Pr(>|t|)"]
+
+AlphaFig$ci_low <- AlphaFig$beta-1.96*AlphaFig$se
+AlphaFig$ci_high <- AlphaFig$beta+1.96*AlphaFig$se
+#Pr(>|t|)
+AlphaFig$FDR_qval <- p.adjust(AlphaFig$pval, method = "fdr")
+
+Alphasummary <- AlphaFig %>% select(-se) %>% 
+  dplyr::rename(Metals=Exposure) %>% 
+  dplyr::rename(coef=beta) 
+
+Alphasummary[,3:7] <- Alphasummary[,3:7] %>% round(3)
+write.csv(Alphasummary,"Alphasummarychildren.csv")
+
+AlphaFigure2 <- ggplot(AlphaFig, aes(Method, beta), group=Exposure) +
+                geom_point(size = 3,  position = position_dodge(width = 1)) +
+                geom_errorbar(data = AlphaFig, aes(ymin = beta - 1.96*se,
+                                  ymax = beta + 1.96*se, linetype = NULL),
+                              width = 0.3, size =0.6,
+                              position=position_dodge(width=1),
+                              group = AlphaFig$Exposure) +
+                geom_hline(yintercept = 0, size = 1) +
+                scale_x_discrete(name = "Alpha Diversity Indices", labels = c("Shannon","Pielou")) +
+                scale_y_continuous(name = "Effect Estimate") +
+                theme_bw() +ggtitle("Child Exposure - Child Microbiome")+
+                theme(plot.title = element_text(size=22,hjust = 0.5))+
+                theme(panel.grid.major =element_blank(), 
+                      panel.grid.minor =element_blank(),
+                      axis.text = element_text(size = 18),
+                      axis.title = element_text(size = 18)) +
+                facet_wrap( ~ Exposure,scales = "free") +
+                theme(strip.background = element_rect(fill = "white", color = "black", size = 1),
+                      strip.text = element_text(size = 18))
+#Effect Estimate per Standard Deviation Increase in Exposure
+AlphaFigure2
+
+
+####Compute non linear loss for reviewer comments########
+# LOESS_Cd_shannon <- ggplot(dataframewithcovariates_Mn, aes(Cd_c, diversity_shannon)) + geom_smooth()+theme_bw()
+# LOESS_Mn_shannon <- ggplot(dataframewithcovariates_Mn, aes(Mn_c, diversity_shannon)) + geom_smooth()+theme_bw()
+# LOESS_Hg_shannon <- ggplot(dataframewithcovariates_Mn, aes(Hg_c, diversity_shannon)) + geom_smooth()+theme_bw()
+# LOESS_Pb_shannon <- ggplot(dataframewithcovariates_Mn, aes(Pb_c, diversity_shannon)) + geom_smooth()+theme_bw()
+# LOESS_Se_shannon <- ggplot(dataframewithcovariates_Mn, aes(Se_c, diversity_shannon)) + geom_smooth()+theme_bw()
+# 
+# LOESS_Cd_pielou <- ggplot(dataframewithcovariates_Mn, aes(Cd_c, pielou)) + geom_smooth()+theme_bw()
+# LOESS_Mn_pielou <- ggplot(dataframewithcovariates_Mn, aes(Mn_c, pielou)) + geom_smooth()+theme_bw()
+# LOESS_Hg_pielou <- ggplot(dataframewithcovariates_Mn, aes(Hg_c, pielou)) + geom_smooth()+theme_bw()
+# LOESS_Pb_pielou <- ggplot(dataframewithcovariates_Mn, aes(Pb_c, pielou)) + geom_smooth()+theme_bw()
+# LOESS_Se_pielou <- ggplot(dataframewithcovariates_Mn, aes(Se_c, pielou)) + geom_smooth()+theme_bw()
+# 
+# grid.arrange(LOESS_Cd_shannon,LOESS_Mn_shannon,LOESS_Hg_shannon,LOESS_Pb_shannon,LOESS_Se_shannon,LOESS_Cd_pielou,LOESS_Mn_pielou,LOESS_Hg_pielou,LOESS_Pb_pielou,LOESS_Se_pielou, nrow=2
+#                                ,top="Non-Linearity test by fitting metal-diversity with LOESS curve")
+```
+
+
+#Step4: Beta diversity associations, all (Figure 3, Table S5)
+```{r}
+#Permutational Multivariate Analysis Of Variance Using Distance Matrices (adonis)
+
+adonisTABLE <- data.frame(Exposure = factor(),
+                      Method = character(),
+                      Adjust_covariates = numeric(),
+                      Nocovariates = numeric(),
+                      FDR_qval=numeric(),
+                      Adjust_covariates_r2 = numeric())
+
+adonisTABLE[1:20,] <- NA
+adonisTABLE$Exposure <- factor(adonisTABLE$Exposure, levels = c("Cd", "Mn","Hg","Pb","Se"))
+adonisTABLE$Exposure[1:4] <- "Cd"
+adonisTABLE$Exposure[5:8] <- "Mn"
+adonisTABLE$Exposure[9:12] <- "Hg"
+adonisTABLE$Exposure[13:16] <- "Pb"
+adonisTABLE$Exposure[17:20] <- "Se"
+
+
+adonisTABLE$Method <- rep(c("Weighted UniFrac", "Bray-Curtis", "Unweighted UniFrac","Jaccard"))
+adonisTABLE$Method <- factor(adonisTABLE$Method, levels = c("Weighted UniFrac","Bray-Curtis","Unweighted UniFrac", "Jaccard"))
+
+
+##############Weighted Unifraq################
+set.seed(1)
+yy_weighted <- distance(physeq, method="wunifrac")
+set.seed(1)
+yy_weighted_Mn <- distance(physeq_Mn, method="wunifrac")
+
+set.seed(1)
+weighted_Cd <- adonis(formula=yy_weighted_Mn~Cd_c+Breastfeed+Gestational_age+Family_income_Y6+Sex,data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum", by = "margin")
+set.seed(1)
+weighted_Cd_nocov <- adonis(formula=yy_weighted_Mn~Cd_c, strata = NULL,data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum",by = "margin")
+adonisTABLE[1,3] <- weighted_Cd$aov.tab["Cd_c","Pr(>F)"]
+adonisTABLE[1,4] <- weighted_Cd_nocov$aov.tab["Cd_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[1] <- weighted_Cd$aov.tab["Cd_c","R2"]
+
+set.seed(1)
+weighted_Mn <- adonis(formula=yy_weighted_Mn~Mn_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+weighted_Mn_nocov <- adonis(formula=yy_weighted_Mn~Mn_c, data=dataframewithcovariates_Mn, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[5,3] <- weighted_Mn$aov.tab["Mn_c","Pr(>F)"]
+adonisTABLE[5,4] <- weighted_Mn_nocov$aov.tab["Mn_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[5] <- weighted_Mn$aov.tab["Mn_c","R2"]
+
+set.seed(1)
+weighted_Hg <- adonis(formula=yy_weighted~Hg_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+weighted_Hg_nocov <- adonis(formula=yy_weighted~Hg_c, data=dataframewithcovariates, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[9,3] <- weighted_Hg$aov.tab["Hg_c","Pr(>F)"]
+adonisTABLE[9,4] <- weighted_Hg_nocov$aov.tab["Hg_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[9] <- weighted_Hg$aov.tab["Hg_c","R2"]
+
+set.seed(1)
+weighted_Pb <- adonis(formula=yy_weighted~Pb_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+weighted_Pb_nocov <- adonis(formula=yy_weighted~Pb_c, data=dataframewithcovariates, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[13,3] <- weighted_Pb$aov.tab["Pb_c","Pr(>F)"]
+adonisTABLE[13,4] <- weighted_Pb_nocov$aov.tab["Pb_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[13] <- weighted_Pb$aov.tab["Pb_c","R2"]
+
+
+set.seed(1)
+weighted_Se <- adonis(formula=yy_weighted_Mn~Se_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+weighted_Se_nocov <- adonis(formula=yy_weighted_Mn~Se_c, data=dataframewithcovariates_Mn, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[17,3] <- weighted_Se$aov.tab["Se_c","Pr(>F)"]
+adonisTABLE[17,4] <- weighted_Se_nocov$aov.tab["Se_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[17] <- weighted_Se$aov.tab["Se_c","R2"]
+
+##############Unweighted Unifraq################
+set.seed(1)
+yy_unweighted <- distance(physeq, method="unifrac")
+set.seed(1)
+yy_unweighted_Mn <- distance(physeq_Mn, method="unifrac")
+
+###
+set.seed(1)
+unweighted_Cd <- adonis(formula=yy_unweighted_Mn~Cd_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+unweighted_Cd_nocov <- adonis(formula=yy_unweighted_Mn~Cd_c, strata = NULL,data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+adonisTABLE[3,3] <- unweighted_Cd$aov.tab["Cd_c","Pr(>F)"]
+adonisTABLE[3,4] <- unweighted_Cd_nocov$aov.tab["Cd_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[3] <- unweighted_Cd$aov.tab["Cd_c","R2"]
+
+set.seed(1)
+unweighted_Mn <- adonis(formula=yy_unweighted_Mn~Mn_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+unweighted_Mn_nocov <- adonis(formula=yy_unweighted_Mn~Mn_c, data=dataframewithcovariates_Mn, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+
+adonisTABLE[7,3] <- unweighted_Mn$aov.tab["Mn_c","Pr(>F)"]
+adonisTABLE[7,4] <- unweighted_Mn_nocov$aov.tab["Mn_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[7] <- unweighted_Mn$aov.tab["Mn_c","R2"]
+
+set.seed(1)
+unweighted_Hg <- adonis(formula=yy_unweighted~Hg_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+unweighted_Hg_nocov <- adonis(formula=yy_unweighted~Hg_c, data=dataframewithcovariates, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[11,3] <- unweighted_Hg$aov.tab["Hg_c","Pr(>F)"]
+adonisTABLE[11,4] <- unweighted_Hg_nocov$aov.tab["Hg_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[11] <- unweighted_Hg$aov.tab["Hg_c","R2"]
+
+set.seed(1)
+unweighted_Pb <- adonis(formula=yy_unweighted~Pb_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+unweighted_Pb_nocov <- adonis(formula=yy_unweighted~Pb_c, data=dataframewithcovariates, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[15,3] <- unweighted_Pb$aov.tab["Pb_c","Pr(>F)"]
+adonisTABLE[15,4] <- unweighted_Pb_nocov$aov.tab["Pb_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[15] <- unweighted_Pb$aov.tab["Pb_c","R2"]
+
+set.seed(1)
+unweighted_Se <- adonis(formula=yy_unweighted_Mn~Se_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+unweighted_Se_nocov <- adonis(formula=yy_unweighted_Mn~Se_c, data=dataframewithcovariates_Mn, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[19,3] <- unweighted_Se$aov.tab["Se_c","Pr(>F)"]
+adonisTABLE[19,4] <- unweighted_Se_nocov$aov.tab["Se_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[19] <- unweighted_Se$aov.tab["Se_c","R2"]
+
+
+###########Bray-Curtis Distance########
+YY_bray <- distance(physeq, "bray")
+YY_bray_Mn <- distance(physeq_Mn, "bray")
+
+set.seed(1)
+bray_Cd <- adonis(formula=YY_bray_Mn~Cd_c+Breastfeed+Gestational_age+Family_income_Y6+Sex,data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+
+set.seed(1)
+bray_Cd_nocov <- adonis(formula=YY_bray_Mn~Cd_c, strata = NULL,data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+adonisTABLE[2,3] <- bray_Cd$aov.tab["Cd_c","Pr(>F)"]
+adonisTABLE[2,4] <- bray_Cd_nocov$aov.tab["Cd_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[2] <- bray_Cd$aov.tab["Cd_c","R2"]
+
+
+set.seed(1)
+bray_Mn <- adonis(formula=YY_bray_Mn~Mn_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+bray_Mn_nocov <- adonis(formula=YY_bray_Mn~Mn_c, data=dataframewithcovariates_Mn, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[6,3] <- bray_Mn$aov.tab["Mn_c","Pr(>F)"]
+adonisTABLE[6,4] <- bray_Mn_nocov$aov.tab["Mn_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[6] <- bray_Mn$aov.tab["Mn_c","R2"]
+
+set.seed(1)
+bray_Hg <- adonis(formula=YY_bray~Hg_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+bray_Hg_nocov <- adonis(formula=YY_bray~Hg_c, data=dataframewithcovariates, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[10,3] <- bray_Hg$aov.tab["Hg_c","Pr(>F)"]
+adonisTABLE[10,4] <- bray_Hg_nocov$aov.tab["Hg_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[10] <- bray_Hg$aov.tab["Hg_c","R2"]
+
+set.seed(1)
+bray_Pb <- adonis(formula=YY_bray~Pb_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+bray_Pb_nocov <- adonis(formula=YY_bray~Pb_c, data=dataframewithcovariates, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[14,3] <- bray_Pb$aov.tab["Pb_c","Pr(>F)"]
+adonisTABLE[14,4] <- bray_Pb_nocov$aov.tab["Pb_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[14] <- bray_Pb$aov.tab["Pb_c","R2"]
+
+set.seed(1)
+bray_Se <- adonis(formula=YY_bray_Mn~Se_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+bray_Se_nocov <- adonis(formula=YY_bray_Mn~Se_c, data=dataframewithcovariates_Mn, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[18,3] <- bray_Se$aov.tab["Se_c","Pr(>F)"]
+adonisTABLE[18,4] <- bray_Se_nocov$aov.tab["Se_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[18] <- bray_Se$aov.tab["Se_c","R2"]
+
+#########jaccard distance########
+yy_jaccard <- distance(physeq,"jaccard",binary = TRUE)
+yy_jaccard_Mn <- distance(physeq_Mn,"jaccard",binary = TRUE)
+
+set.seed(1)
+jaccard_Cd <- adonis(formula=yy_jaccard_Mn~Cd_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+jaccard_Cd_nocov <- adonis(formula=yy_jaccard_Mn~Cd_c, strata = NULL, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+adonisTABLE[4,3] <- jaccard_Cd$aov.tab["Cd_c","Pr(>F)"]
+adonisTABLE[4,4] <- jaccard_Cd_nocov$aov.tab["Cd_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[4] <- jaccard_Cd$aov.tab["Cd_c","R2"]
+
+
+set.seed(1)
+jaccard_Mn <- adonis(formula=yy_jaccard_Mn~Mn_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+jaccard_Mn_nocov <- adonis(formula=yy_jaccard_Mn~Mn_c, data=dataframewithcovariates_Mn, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[8,3] <- jaccard_Mn$aov.tab["Mn_c","Pr(>F)"]
+adonisTABLE[8,4] <- jaccard_Mn_nocov$aov.tab["Mn_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[8] <- jaccard_Mn$aov.tab["Mn_c","R2"]
+
+
+set.seed(1)
+jaccard_Hg <- adonis(formula=yy_jaccard~Hg_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+jaccard_Hg_nocov <- adonis(formula=yy_jaccard~Hg_c, data=dataframewithcovariates, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[12,3] <- jaccard_Hg$aov.tab["Hg_c","Pr(>F)"]
+adonisTABLE[12,4] <- jaccard_Hg_nocov$aov.tab["Hg_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[12] <- jaccard_Hg$aov.tab["Hg_c","R2"]
+
+set.seed(1)
+jaccard_Pb <- adonis(formula=yy_jaccard~Pb_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+jaccard_Pb_nocov <- adonis(formula=yy_jaccard~Pb_c, data=dataframewithcovariates, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[16,3] <- jaccard_Pb$aov.tab["Pb_c","Pr(>F)"]
+adonisTABLE[16,4] <- jaccard_Pb$aov.tab["Pb_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[16] <- jaccard_Pb$aov.tab["Pb_c","R2"]
+
+set.seed(1)
+jaccard_Se <- adonis(formula=yy_jaccard_Mn~Se_c+Breastfeed+Gestational_age+Family_income_Y6+Sex, data=dataframewithcovariates_Mn, permutations = 999, contr.unordered = "contr.sum")
+set.seed(1)
+jaccard_Se_nocov <- adonis(formula=yy_jaccard_Mn~Se_c, data=dataframewithcovariates_Mn, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[20,3] <- jaccard_Se$aov.tab["Se_c","Pr(>F)"]
+adonisTABLE[20,4] <- jaccard_Se_nocov$aov.tab["Se_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[20] <- jaccard_Se$aov.tab["Se_c","R2"]
+
+##########
+b <- c(0, 0.25, 0.5, 0.75, 1)
+
+adonisTABLE$pless1 <- as.numeric(ifelse(adonisTABLE$Nocovariates < 0.2, adonisTABLE$Nocovariates,NA))
+BetaHeatMap_nocovariates <- ggplot(adonisTABLE, 
+                      aes (Exposure, Method, fill = Nocovariates)) +
+  theme_bw() +theme(panel.grid.major =element_blank(), panel.grid.minor =element_blank()) +
+  geom_tile() +
+  scale_x_discrete(name = "", labels = wrap_format(10), 
+                   limits = c("Cd", "Mn","Hg","Pb","Se")) +
+  scale_y_discrete(name = "", labels = wrap_format(10),
+                   limits = rev(c("Weighted UniFrac", "Bray-Curtis", "Unweighted UniFrac","Jaccard"))) +
+  geom_text(data = adonisTABLE,
+            aes(Exposure, Method, label = round(pless1, digits =3)), 
+            show.legend = FALSE, color = "white", size = 6) +
+  scale_fill_gradientn(limits = c(0,1.01), colors = rev(brewer.pal(6, "YlOrRd")), 
+                       breaks =b, labels = format(b), 
+                       guide = guide_colorbar(barheight = unit(8, "cm"),
+                                              title = "p-value",title.vjust =8)) +
+  theme(axis.text = element_text(size = 18),
+        axis.title = element_text(size = 18),
+        legend.title = element_text(size =18),
+        legend.text = element_text(size =18))+ggtitle("Beta Diversity_No Covariates")
+
+print(BetaHeatMap_nocovariates)
+##############
+#+ggtitle("Beta Diversity_Adjusting Covariates breastfeeding,income_Y6,gestational_age,gender")
+adonisTABLE$pless2 <- as.numeric(ifelse(adonisTABLE$Adjust_covariates < 0.2, adonisTABLE$Adjust_covariates,NA))
+BetaHeatMap_adjustcovariates <- ggplot(adonisTABLE, 
+                      aes (Exposure, Method, fill = Adjust_covariates)) +
+  theme_bw() +theme(panel.grid.major =element_blank(), panel.grid.minor =element_blank()) +
+  geom_tile() +
+  scale_x_discrete(name = "", labels = wrap_format(10), 
+                   limits = c("Cd", "Mn","Hg","Pb","Se")) +
+  scale_y_discrete(name = "", labels = wrap_format(10),
+                   limits = rev(c("Weighted UniFrac", "Bray-Curtis", "Unweighted UniFrac","Jaccard"))) +
+  geom_text(data = adonisTABLE,
+            aes(Exposure, Method, label = round(pless2, digits =3)), 
+            show.legend = FALSE, color = "white", size = 6) +
+  scale_fill_gradientn(limits = c(0,1.01), colors = rev(brewer.pal(6, "YlOrRd")), 
+                       breaks =b, labels = format(b), 
+                       guide = guide_colorbar(barheight = unit(8, "cm"),
+                                              title = "p-value",title.vjust =8)) +
+  theme(axis.text = element_text(size = 18),
+        axis.title = element_text(size = 18),
+        legend.title = element_text(size =18),
+        legend.text = element_text(size =18))
+
+print(BetaHeatMap_adjustcovariates)
+
+grid.arrange(BetaHeatMap_nocovariates,BetaHeatMap_adjustcovariates)
+
+
+adonisTABLE$FDR_qval <- p.adjust(adonisTABLE$Adjust_covariates, method = "fdr")
+adonisTABLE$noadjust_FDR_qval <- p.adjust(adonisTABLE$Nocovariates, method = "fdr")
+
+BetasigTable <-  adonisTABLE %>% select(Exposure,Method,Adjust_covariates,FDR_qval,Nocovariates,noadjust_FDR_qval,Adjust_covariates_r2) %>% 
+  dplyr::rename(Metals=Exposure) %>% 
+  dplyr::rename(pval=Adjust_covariates)
+
+BetasigTable[,3:4] <- BetasigTable[,3:4] %>% round(3)
+write.csv(BetasigTable,"betaccassociations.csv")
+
+```
+
+
+#Step 5: Taxa (phylum & family) associations
+#Taxa (phylum) associations (Table 2, Excel Table S8)
+```{r}
+#if(!requireNamespace("BiocManager", quietly = TRUE))
+    #install.packages("BiocManager")
+#BiocManager::install("Maaslin2")
+library(Maaslin2)
+library(scales)
+
+phyloGlom = tax_glom(physeq, "Phylum")
+glomTax = tax_table(phyloGlom)[,"Phylum"]
+glomOTU = otu_table(phyloGlom)
+glomTable = merge(glomOTU,glomTax,by=0,all=TRUE) 
+rownames(glomTable) = glomTable[,"Phylum"]
+glomTable$Row.names = NULL
+glomTable$Phylum = NULL
+
+#remove phylums in less than 10% of samples7
+glomTable <- glomTable[rowSums(glomTable == 0) <= 61, ]
+
+
+glomTable2 = glomTable / rep(colSums(glomTable), each = nrow(glomTable))
+glomTable3 <- glomTable2 %>% t()
+Sample <- rownames(glomTable3)
+glomTable3 <- cbind(Sample,glomTable3) %>% as.data.frame()
+
+glomTable3 <- glomTable3[,-1]
+
+input_data_phy <- glomTable3 %>% as.data.frame()
+input_data_phy[] <- lapply(input_data_phy, function(x) as.numeric(as.character(x)))
+
+input_metadata_phy <- dataframewithcovariates %>% select(-diversity_shannon,-pielou) %>% as.data.frame()
+
+##########removeoutlier########
+input_metadata_phy_Mn <- input_metadata_phy[!(row.names(input_metadata_phy) %in% "PARTICIPANT_ID"), ]
+input_data_phy_Mn <- input_data_phy[!(row.names(input_data_phy) %in% "PARTICIPANT_ID"), ]
+#############
+
+#Cd phylum, Verrucomicrobiota 
+fit_data1 = Maaslin2(
+    input_data = input_data_phy_Mn,
+    input_metadata = input_metadata_phy_Mn,
+    output = "masslin_phylum_output_Cd",
+    fixed_effects = c("Cd_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Cd <- read.table(file="./masslin_phylum_output_Cd/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Cd <- FDRq_Cd[which(FDRq_Cd$metadata=='Cd_c', ),]
+correctedq_Cd <- p.adjust(FDRq_Cd$pval, method = "fdr")
+FDRq_Cd <- cbind(FDRq_Cd,correctedq_Cd)
+
+#Mn phylum, Verrucomicrobiota
+fit_data2 = Maaslin2(
+    input_data = input_data_phy_Mn,
+    input_metadata = input_metadata_phy_Mn,
+    output = "masslin_phylum_output_Mn",
+    fixed_effects = c("Mn_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Mn <- read.table(file="./masslin_phylum_output_Mn/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Mn <- FDRq_Mn[which(FDRq_Mn$metadata=='Mn_c', ),]
+correctedq_Mn <- p.adjust(FDRq_Mn$pval, method = "fdr")
+FDRq_Mn <- cbind(FDRq_Mn,correctedq_Mn)
+
+#Hg phylum
+fit_data3 = Maaslin2(
+    input_data = input_data_phy,
+    input_metadata = input_metadata_phy,
+    output = "masslin_phylum_output_Hg",
+    fixed_effects = c("Hg_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Hg <- read.table(file="./masslin_phylum_output_Hg/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Hg <- FDRq_Hg[which(FDRq_Hg$metadata=='Hg_c', ),]
+correctedq_Hg <- p.adjust(FDRq_Hg$pval, method = "fdr")
+FDRq_Hg <- cbind(FDRq_Hg,correctedq_Hg)
+
+#Pb phylum
+fit_data4 = Maaslin2(
+    input_data = input_data_phy,
+    input_metadata = input_metadata_phy,
+    output = "masslin_phylum_output_Pb",
+    fixed_effects = c("Pb_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Pb <- read.table(file="./masslin_phylum_output_Pb/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Pb <- FDRq_Pb[which(FDRq_Pb$metadata=='Pb_c', ),]
+correctedq_Pb <- p.adjust(FDRq_Pb$pval, method = "fdr")
+FDRq_Pb <- cbind(FDRq_Pb,correctedq_Pb)
+
+#Se phylum
+fit_data5 = Maaslin2(
+    input_data = input_data_phy_Mn,
+    input_metadata = input_metadata_phy_Mn,
+    output = "masslin_phylum_output_Se",
+    fixed_effects = c("Se_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Se <- read.table(file="./masslin_phylum_output_Se/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Se <- FDRq_Se[which(FDRq_Se$metadata=='Se_c', ),]
+correctedq_Se <- p.adjust(FDRq_Se$pval, method = "fdr")
+FDRq_Se <- cbind(FDRq_Se,correctedq_Se)
+
+
+FDRq_Cd <- FDRq_Cd %>% dplyr::rename(FDR_qval=correctedq_Cd)
+FDRq_Mn <- FDRq_Mn %>% dplyr::rename(FDR_qval=correctedq_Mn)
+FDRq_Hg <- FDRq_Hg %>% dplyr::rename(FDR_qval=correctedq_Hg)
+FDRq_Pb <- FDRq_Pb %>% dplyr::rename(FDR_qval=correctedq_Pb)
+FDRq_Se <- FDRq_Se %>% dplyr::rename(FDR_qval=correctedq_Se)
+
+Allassociationsphyla <- rbind(FDRq_Cd,FDRq_Mn,FDRq_Hg,FDRq_Pb,FDRq_Se)
+Allassociationsphyla <- Allassociationsphyla %>% select(metadata, feature, coef,stderr,pval,FDR_qval)
+
+```
+
+#Taxa (family) associations (Table 2, Excel Table S8)
+```{r}
+family.sum = tapply(taxa_sums(physeq), tax_table(physeq)[, "Family"], sum, na.rm=TRUE)
+
+phyloGlom = tax_glom(physeq, "Family")
+glomTax = tax_table(phyloGlom)[,"Family"]
+glomOTU = otu_table(phyloGlom)
+glomTable = merge(glomOTU,glomTax,by=0,all=TRUE) 
+glomTable <- glomTable[rowSums(glomTable == 0) <= 61, ]
+glomTable <- glomTable[(!glomTable$Family == "__"), ]
+glomTable <- glomTable[(!glomTable$Family == "uncultured"), ]
+
+rownames(glomTable) = glomTable[,"Family"]
+glomTable$Row.names = NULL
+glomTable$Family = NULL
+
+glomTable2 = glomTable / rep(colSums(glomTable), each = nrow(glomTable))
+glomTable3 <- glomTable2 %>% t()
+
+Sample <- rownames(glomTable3)
+glomTable3 <- cbind(Sample,glomTable3) %>% as.data.frame()
+
+glomTable3 <- glomTable3[,-1]
+
+input_data <- glomTable3 %>% as.data.frame()
+input_data[] <- lapply(input_data, function(x) as.numeric(as.character(x)))
+
+input_metadata <- dataframewithcovariates %>% select(-diversity_shannon,-pielou) %>% as.data.frame()
+
+
+#######Remove outlier#######
+input_metadata_Mn <- input_metadata[!(row.names(input_metadata) %in% "P_2193"), ]
+input_data_Mn <- input_data[!(row.names(input_data) %in% "P_2193"), ]
+# ################
+
+
+fit_data6 = Maaslin2(
+    input_data = input_data_Mn,
+    input_metadata = input_metadata_Mn,
+    output = "masslin_family_output_Cd",
+    fixed_effects = c("Cd_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Cd2 <- read.table(file="./masslin_family_output_Cd/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Cd2 <- FDRq_Cd2[which(FDRq_Cd2$metadata=='Cd_c', ),]
+correctedq_Cd2 <- p.adjust(FDRq_Cd2$pval, method = "fdr")
+FDRq_Cd2 <- cbind(FDRq_Cd2,correctedq_Cd2)
+
+#Mn phylum, Verrucomicrobiota
+fit_data7 = Maaslin2(
+    input_data = input_data_Mn,
+    input_metadata = input_metadata_Mn,
+    output = "masslin_family_output_Mn",
+    fixed_effects = c("Mn_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Mn2 <- read.table(file="./masslin_family_output_Mn/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Mn2 <- FDRq_Mn2[which(FDRq_Mn2$metadata=='Mn_c', ),]
+correctedq_Mn2 <- p.adjust(FDRq_Mn2$pval, method = "fdr")
+FDRq_Mn2 <- cbind(FDRq_Mn2,correctedq_Mn2)
+
+#Hg phylum
+fit_data8 = Maaslin2(
+    input_data = input_data,
+    input_metadata = input_metadata,
+    output = "masslin_family_output_Hg",
+    fixed_effects = c("Hg_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Hg2 <- read.table(file="./masslin_family_output_Hg/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Hg2 <- FDRq_Hg2[which(FDRq_Hg2$metadata=='Hg_c', ),]
+correctedq_Hg2 <- p.adjust(FDRq_Hg2$pval, method = "fdr")
+FDRq_Hg2 <- cbind(FDRq_Hg2,correctedq_Hg2)
+
+#Pb phylum
+fit_data9 = Maaslin2(
+    input_data = input_data,
+    input_metadata = input_metadata,
+    output = "masslin_family_output_Pb",
+    fixed_effects = c("Pb_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Pb2 <- read.table(file="./masslin_family_output_Pb/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Pb2 <- FDRq_Pb2[which(FDRq_Pb2$metadata=='Pb_c', ),]
+correctedq_Pb2 <- p.adjust(FDRq_Pb2$pval, method = "fdr")
+FDRq_Pb2 <- cbind(FDRq_Pb2,correctedq_Pb2)
+
+#Se phylum
+fit_data10 = Maaslin2(
+    input_data = input_data_Mn,
+    input_metadata = input_metadata_Mn,
+    output = "masslin_family_output_Se",
+    fixed_effects = c("Se_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Se2 <- read.table(file="./masslin_family_output_Se/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Se2 <- FDRq_Se2[which(FDRq_Se2$metadata=='Se_c', ),]
+correctedq_Se2 <- p.adjust(FDRq_Se2$pval, method = "fdr")
+FDRq_Se2 <- cbind(FDRq_Se2,correctedq_Se2)
+
+
+FDRq_Cd2 <- FDRq_Cd2 %>% dplyr::rename(FDR_qval=correctedq_Cd2)
+FDRq_Mn2 <- FDRq_Mn2 %>% dplyr::rename(FDR_qval=correctedq_Mn2)
+FDRq_Hg2 <- FDRq_Hg2 %>% dplyr::rename(FDR_qval=correctedq_Hg2)
+FDRq_Pb2 <- FDRq_Pb2 %>% dplyr::rename(FDR_qval=correctedq_Pb2)
+FDRq_Se2 <- FDRq_Se2 %>% dplyr::rename(FDR_qval=correctedq_Se2)
+
+Allassociationsfamilies <- rbind(FDRq_Cd2,FDRq_Mn2,FDRq_Hg2,FDRq_Pb2,FDRq_Se2)
+Allassociationsfamilies <- Allassociationsfamilies %>% select(metadata, feature, coef,stderr,pval,FDR_qval)
+
+ALLccpairtaxaassociations <- rbind(Allassociationsphyla,Allassociationsfamilies)
+ALLccpairtaxaassociations[,3:6] <- ALLccpairtaxaassociations[,3:6] %>% round(3)
+
+write.csv(ALLccpairtaxaassociations,"ALLccpairtaxaassociations.csv")
+```
+
+#Taxa association plot, all
+```{r}
+########### Taxa screening figure##############
+#no outlier removal
+#Mn vs Verrucomicrobiota
+Stats_Mn_Verrucomicrobiota <- FDRq_Mn[1,]
+Verrucomicrobiota <- input_data_phy %>% select("Verrucomicrobiota")
+Mn <- input_metadata_phy %>% select("Mn_c")
+
+#Cd vs Verrucomicrobiota
+Stats_Cd_Verrucomicrobiota <- FDRq_Cd[1,]
+Cd <- input_metadata_phy %>% select("Cd_c")
+
+#family
+#Mn vs Akkermansiaceae
+Stats_Mn_Akkermansiaceae <- FDRq_Mn2[1,] 
+Akkermansiaceae <- input_data%>% select("Akkermansiaceae")
+
+
+#Se vs Ethanoligenenaceae
+Stats_Se_Ethanoligenenaceae <- FDRq_Se2[1,]
+Ethanoligenenaceae <- input_data%>% select("Ethanoligenenaceae") 
+Se <- input_metadata%>% select("Se_c")
+
+
+Erysipelatoclostridiaceae <- input_data%>% select("Erysipelatoclostridiaceae") 
+Stats_Mn_Erysipelatoclostridiaceae <- FDRq_Mn2[1,]
+
+
+taxascreendf <- cbind(Mn,Cd,Se,Verrucomicrobiota,Akkermansiaceae,Ethanoligenenaceae,Erysipelatoclostridiaceae) %>% as.data.frame() 
+taxascreenstats <- rbind(Stats_Mn_Verrucomicrobiota,Stats_Cd_Verrucomicrobiota,Stats_Mn_Akkermansiaceae,Stats_Se_Ethanoligenenaceae,Stats_Mn_Erysipelatoclostridiaceae)
+
+Taxascreenplot1 <- ggplot(taxascreendf,aes(x=Mn_c, y=log(Verrucomicrobiota))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=170, y=-2, label="FDR q=0.0007443939, coef=-0.4131474",color="red") +
+  ggtitle("Association of Verrucomicrobiota ~ Mn, adjusting for breastfeeding, family income, gestational age, sex")
+
+
+Taxascreenplot2 <- ggplot(taxascreendf,aes(x=Mn_c, y=log(Akkermansiaceae))) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=250, y=-2, label="FDR q=0.0083226168, coef=-0.3987696",color="red") +
+  ggtitle("Association of Akkermansiaceae ~ Mn, adjusting for breastfeeding, family income, gestational age, sex")
+
+Taxascreenplot3 <- ggplot(taxascreendf,aes(x=Cd_c, y=log(Verrucomicrobiota))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=1.5, y=-2, label="FDR q=0.0214927800, coef=-0.3241482",color="red") +
+  ggtitle("Association of Verrucomicrobiota ~ Cd, adjusting for breastfeeding, family income, gestational age, sex")
+
+
+#Se, outlier needs to be removed.
+Taxascreenplot4 <- ggplot(taxascreendf,aes(x=Se_c, y=log(Ethanoligenenaceae))) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=2, y=-8, label="FDR q=0.0130432650, coef=0.1448329",color="red") +
+  ggtitle("Association of Ethanoligenenaceae ~ Se, adjusting for breastfeeding, family income, gestational age, sex")
+
+grid.arrange(Taxascreenplot1,Taxascreenplot2,Taxascreenplot3,Taxascreenplot4,nrow=2
+                               ,top="Taxa association_all")
+```
+
+# Taxa association plot, outlier removed (Figure S1)
+```{r}
+######## figures remove outlier, Cd and Se no longer significant #########
+
+#Mn vs Verrucomicrobiota
+Stats_Mn_Verrucomicrobiota <- FDRq_Mn[1,]
+Verrucomicrobiota <- input_data_phy %>% select("Verrucomicrobiota")
+Mn <- input_metadata_phy %>% select("Mn_c")
+
+#Mn family
+Stats_Mn_family <- FDRq_Mn2[c(1:4),]
+Akkermansiaceae <- input_data%>% select("Akkermansiaceae")
+Erysipelatoclostridiaceae <- input_data%>% select("Erysipelatoclostridiaceae")
+Prevotellaceae <- input_data%>% select("Prevotellaceae")
+Eggerthellaceae <- input_data%>% select("Eggerthellaceae")
+
+#Se phylum
+#Se vs Ethanoligenenaceae
+Stats_Se_phylum <- FDRq_Se[c(1,2),]
+Verrucomicrobiota <- input_data_phy%>% select("Verrucomicrobiota") 
+Proteobacteria <- input_data_phy%>% select("Proteobacteria") 
+Se <- input_metadata_phy%>% select("Se_c")
+
+taxascreendf <- cbind(Mn,Se,Verrucomicrobiota,Akkermansiaceae,Erysipelatoclostridiaceae,Prevotellaceae,Eggerthellaceae,Proteobacteria) %>% as.data.frame() 
+taxascreenstats <- rbind(Stats_Mn_Verrucomicrobiota,Stats_Mn_family,Stats_Se_phylum)
+taxascreendf <- taxascreendf[!(row.names(taxascreendf) %in% "P_2193"), ]
+
+#adjusting for breastfeeding, family income, gestational age, sex
+Taxascreenplot5 <- ggplot(taxascreendf,aes(x=Mn_c, y=log(Verrucomicrobiota))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=170, y=-2, label="coef=-0.305, q value=0.031",color="red") +
+  ggtitle("Association of Verrucomicrobiota ~ Mn")+
+  labs(x="Chilhood Blood Manganese (nmol/L)", y="Verrucomicrobiota Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+Taxascreenplot6 <- ggplot(taxascreendf,aes(x=Mn_c, y=log(Erysipelatoclostridiaceae))) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=250, y=-2, label="coef=-0.226, q value=0.027",color="red") +
+  ggtitle("Association of Erysipelatoclostridiaceae ~ Mn")+
+  labs(x="Chilhood Blood Manganese (nmol/L)", y="Erysipelatoclostridiaceae Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+Taxascreenplot7 <- ggplot(taxascreendf,aes(x=Mn_c, y=log(Prevotellaceae))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=170, y=-2, label="coef=0.437, q value=0.052",color="red") +
+  ggtitle("Association of Prevotellaceae ~ Mn")+
+  labs(x="Chilhood Blood Manganese (nmol/L)", y="Prevotellaceae Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+Taxascreenplot8 <- ggplot(taxascreendf,aes(x=Mn_c, y=log(Eggerthellaceae))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=170, y=-2, label="coef=-0.228, q value=0.052",color="red") +
+  ggtitle("Association of Eggerthellaceae ~ Mn")+
+  labs(x="Chilhood Blood Manganese (nmol/L)", y="Eggerthellaceae Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+Taxascreenplot9 <- ggplot(taxascreendf,aes(x=Mn_c, y=log(Akkermansiaceae))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=170, y=-2, label="coef=-0.307, q value=0.052",color="red") +
+  ggtitle("Association of Akkermansiaceae ~ Mn")+
+  labs(x="Chilhood Blood Manganese (nmol/L)", y="Akkermansiaceae Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+Taxascreenplot10 <- ggplot(taxascreendf,aes(x=Se_c, y=log(Verrucomicrobiota))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=2, y=-2, label="coef=0.262, q value=0.084",color="red") +
+  ggtitle("Association of Verrucomicrobiota ~ Se")+
+  labs(x="Chilhood Blood Selenium (umol/L)", y="Verrucomicrobiota Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+Taxascreenplot11 <- ggplot(taxascreendf,aes(x=Se_c, y=log(Proteobacteria))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=2, y=-2, label="coef=0.158, q value=0.093",color="red") +
+  ggtitle("Association of Proteobacteria ~ Se")+
+  labs(x="Chilhood Blood Selenium (umol/L)", y="Proteobacteria Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+grid.arrange(Taxascreenplot5,Taxascreenplot9,nrow=1,top="Taxa association child-child pair")
+grid.arrange(Taxascreenplot6,Taxascreenplot8,nrow=1,top="Taxa association child-child pair")
+grid.arrange(Taxascreenplot7,Taxascreenplot8,nrow=1,top="Taxa association child-child pair")
+grid.arrange(Taxascreenplot10,Taxascreenplot11,nrow=1,top="Taxa association child-child pair")
+
+write.csv(taxascreenstats, file = "taxa-children children pair.csv")
+
+```
+
+
+#Step6: Metaphlan direct species association (shotgun metagenome data)
+
+#Metaphlan table cleanup
+```{r}
+SPECIES <- lapply(list.files(pattern = "*merged_abundance_table.tsv"), function(i){read_tsv(i)}) 
+
+IDS <- lapply(SPECIES,function(x) substring(names(x),1,regexpr("_dehost_metaphlan_bugs_list",names(x))-1))
+IDS <- unlist(IDS)[-1]
+
+SPECIES <- lapply(SPECIES, function(x) 
+  separate(data = x, col = "#clade_name", into = c("Domain","Phylum","Class","Order","Family","Genus","Species"), sep = "\\|"))
+SPECIES <- lapply(SPECIES, subset)
+SPECIES <- SPECIES %>% reduce(full_join, by = "Domain")
+colnames(SPECIES)[8:ncol(SPECIES)] <- IDS
+SPECIES <- SPECIES[,-8] %>% as.data.frame()
+#one incorrect naming modified
+SPECIES <- SPECIES %>% dplyr::rename('PARTICIPANT_ID'='PARTICIPANT_ID')
+
+SPECIES_Species <- SPECIES[complete.cases(SPECIES[ ,7]),]
+SPECIES_Species_relab <- SPECIES_Species
+dim(SPECIES_Species[duplicated(SPECIES_Species$Species),])[1]
+
+```
+
+
+#Metaphlan species association (Excel Table S9)
+```{r}
+#Shotgun had 1 less sample, the full data is 67 participants, one outlier removed data is 66 participants, two input dataframe
+#no outlier removed input dataframe
+SPECIES_Species <- SPECIES_Species[,-c(1:6)]
+rownames(SPECIES_Species) <- NULL
+SPECIESLIST <- SPECIES_Species$Species
+rownames(SPECIES_Species) <- SPECIESLIST
+SPECIES_Species <- SPECIES_Species[,-1]
+SPECIES_Species_2 <- t(SPECIES_Species)
+Samplelist_85 <- rownames(SPECIES_Species_2) %>% as.data.frame()
+colnames(Samplelist_85) <- 'SampleID'
+SPECIES_Species_2 <- cbind(Samplelist_85,SPECIES_Species_2)
+rownames(SPECIES_Species_2) <- NULL
+
+Spciesscreeningdataframe <- cbind(Socioprocessing$record_id,dataframewithcovariates)
+Spciesscreeningdataframe <- Spciesscreeningdataframe %>% dplyr::rename(SampleID='Socioprocessing$record_id')
+Spciesscreeningdataframe$SampleID <- as.character(Spciesscreeningdataframe$SampleID)
+
+ALLmatch_species <- match_df(SPECIES_Species_2,Spciesscreeningdataframe, on ="SampleID")
+Spciesscreeningdataframe <- match_df(Spciesscreeningdataframe,SPECIES_Species_2, on ="SampleID")
+#outlier PARTICIPANT_ID removed,Mn, Se, Cd
+
+rownames(ALLmatch_species) <- ALLmatch_species$SampleID
+ALLmatch_species_Mn <- ALLmatch_species[!(row.names(ALLmatch_species) %in% "PARTICIPANT_ID"), ]
+Spciesscreeningdataframe_Mn <- Spciesscreeningdataframe[!(row.names(Spciesscreeningdataframe) %in% "PARTICIPANT_ID"), ]
+
+
+######childhood metal species association
+
+ALLmatch_species <- ALLmatch_species[,colSums(ALLmatch_species == 0) <= nrow(ALLmatch_species)*0.9]
+ALLmatch_species_Mn <- ALLmatch_species_Mn[,colSums(ALLmatch_species_Mn == 0) <= nrow(ALLmatch_species_Mn)*0.9]
+
+##All for Hg & Pb
+input_metadata_species <- Spciesscreeningdataframe %>% as.data.frame()
+input_data_species <- ALLmatch_species %>% as.data.frame()
+rownames(input_data_species) <- rownames(input_metadata_species)
+input_data_species <- input_data_species[,-1]
+
+##outlier removed for Cd, Mn, Se
+input_metadata_species_Mn <- Spciesscreeningdataframe_Mn %>% as.data.frame()
+input_data_species_Mn <- ALLmatch_species_Mn %>% as.data.frame()
+rownames(input_data_species_Mn) <- rownames(input_metadata_species_Mn)
+input_data_species_Mn <- input_data_species_Mn[,-1]
+
+#Cd, outlier removed dataframe
+fit_data11 = Maaslin2(
+    input_data = input_data_species_Mn,
+    input_metadata = input_metadata_species_Mn,
+    output = "masslin_species_metaphlan_cd",
+    fixed_effects = c("Cd_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Cd_species <- read.table(file="./masslin_species_metaphlan_cd/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Cd_species <- FDRq_Cd_species[which(FDRq_Cd_species$metadata=='Cd_c', ),]
+correctedq_Cd_species <- p.adjust(FDRq_Cd_species$pval, method = "fdr")
+FDRq_Cd_species <- cbind(FDRq_Cd_species,correctedq_Cd_species)
+
+#Hg, full
+fit_data12 = Maaslin2(
+    input_data = input_data_species,
+    input_metadata = input_metadata_species,
+    output = "masslin_species_metaphlan_hg",
+    fixed_effects = c("Hg_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Hg_species <- read.table(file="./masslin_species_metaphlan_hg/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Hg_species <- FDRq_Hg_species[which(FDRq_Hg_species$metadata=='Hg_c', ),]
+correctedq_Hg_species <- p.adjust(FDRq_Hg_species$pval, method = "fdr")
+FDRq_Hg_species <- cbind(FDRq_Hg_species,correctedq_Hg_species)
+
+#Mn, removed
+fit_data13 = Maaslin2(
+    input_data = input_data_species_Mn,
+    input_metadata = input_metadata_species_Mn,
+    output = "masslin_species_metaphlan_mn",
+    fixed_effects = c("Mn_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Mn_species <- read.table(file="./masslin_species_metaphlan_mn/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Mn_species <- FDRq_Mn_species[which(FDRq_Mn_species$metadata=='Mn_c', ),]
+correctedq_Mn_species <- p.adjust(FDRq_Mn_species$pval, method = "fdr")
+FDRq_Mn_species <- cbind(FDRq_Mn_species,correctedq_Mn_species)
+
+#Pb, all
+fit_data14 = Maaslin2(
+    input_data = input_data_species,
+    input_metadata = input_metadata_species,
+    output = "masslin_species_metaphlan_pb",
+    fixed_effects = c("Pb_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Pb_species <- read.table(file="./masslin_species_metaphlan_pb/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Pb_species <- FDRq_Pb_species[which(FDRq_Pb_species$metadata=='Pb_c', ),]
+correctedq_Pb_species <- p.adjust(FDRq_Pb_species$pval, method = "fdr")
+FDRq_Pb_species <- cbind(FDRq_Pb_species,correctedq_Pb_species)
+
+#Se, removed
+fit_data15 = Maaslin2(
+    input_data = input_data_species_Mn,
+    input_metadata = input_metadata_species_Mn,
+    output = "masslin_species_metaphlan_se",
+    fixed_effects = c("Se_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Se_species <- read.table(file="./masslin_species_metaphlan_se/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Se_species <- FDRq_Se_species[which(FDRq_Se_species$metadata=='Se_c', ),]
+correctedq_Se_species <- p.adjust(FDRq_Se_species$pval, method = "fdr")
+FDRq_Se_species <- cbind(FDRq_Se_species,correctedq_Se_species)
+
+
+FDRq_Cd_species <- FDRq_Cd_species %>% dplyr::rename(FDR_qval=correctedq_Cd_species)
+FDRq_Mn_species <- FDRq_Mn_species %>% dplyr::rename(FDR_qval=correctedq_Mn_species)
+FDRq_Hg_species <- FDRq_Hg_species %>% dplyr::rename(FDR_qval=correctedq_Hg_species)
+FDRq_Pb_species <- FDRq_Pb_species %>% dplyr::rename(FDR_qval=correctedq_Pb_species)
+FDRq_Se_species <- FDRq_Se_species %>% dplyr::rename(FDR_qval=correctedq_Se_species)
+
+Allassociations_species <- rbind(FDRq_Cd_species,FDRq_Mn_species,FDRq_Hg_species,FDRq_Pb_species,FDRq_Se_species)
+Allassociations_species <- Allassociations_species %>% select(metadata, feature, coef,stderr,pval,FDR_qval)
+
+write.csv(Allassociations_species,"Allassociations_metaphlan_childhood.csv")
+```
+
+#Sensitivity analysis
+#Alpha diversity-Female (Table S6)
+```{r}
+#install.packages("ggpmisc")
+library(ggpmisc)
+
+#shannonrichness
+summary(shanCd <- lm(diversity_shannon ~ Cd_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(shanCd,which=1:4,main="regression diagnose_Cd_c~Shannon")
+
+summary(shanMn <- lm(diversity_shannon ~ Mn_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(shanMn,which=1:4,main="regression diagnose_Mn_c~Shannon")
+
+summary(shanHg <- lm(diversity_shannon ~ Hg_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates, Sex=="Female")))
+
+summary(shanPb <- lm(diversity_shannon ~ Pb_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates, Sex=="Female")))
+
+summary(shanSe <- lm(diversity_shannon ~ Se_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Female")))
+
+
+#pielouevenness
+summary(piCd <- lm(pielou ~ Cd_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(piCd,which=1:4,main="regression diagnose_Cd_c~Pielou")
+summary(piMn <- lm(pielou ~ Mn_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Female")))
+summary(piHg <- lm(pielou ~ Hg_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates, Sex=="Female")))
+summary(piPb <- lm(pielou ~ Pb_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates, Sex=="Female")))
+summary(piSe <- lm(pielou ~ Se_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Female")))
+AlphaFig <- data.frame(Method = factor(),
+                       Exposure = factor(),
+                       beta = numeric(),
+                       se = numeric(),
+                       ci_low=numeric(),
+                       ci_high=numeric(),
+                       pval=numeric(),
+                       FDR_qval=numeric(),
+                       stringsAsFactors=FALSE)
+
+AlphaFig[1:10,] <- NA
+AlphaFig$Method <- rep(c("Shannon","Pielou"))
+AlphaFig$Method <- factor(AlphaFig$Method, levels = c("Shannon", "Pielou"))
+
+AlphaFig$Exposure <- c("Cd","Cd","Mn","Mn","Hg","Hg","Pb","Pb","Se","Se")
+
+###
+AlphaFig$beta[1] <- shanCd$coefficients[2]
+AlphaFig$se[1] <- coef(summary(shanCd))[2, "Std. Error"]
+AlphaFig$pval[1] <- coef(summary(shanCd))[2, "Pr(>|t|)"]
+AlphaFig$beta[2] <- piCd$coefficients[2]
+AlphaFig$se[2] <- coef(summary(piCd))[2, "Std. Error"]
+AlphaFig$pval[2] <- coef(summary(piCd))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[3] <- shanMn$coefficients[2]
+AlphaFig$se[3] <- coef(summary(shanMn))[2, "Std. Error"]
+AlphaFig$pval[3] <- coef(summary(shanMn))[2, "Pr(>|t|)"]
+AlphaFig$beta[4] <- piMn$coefficients[2]
+AlphaFig$se[4] <- coef(summary(piMn))[2, "Std. Error"]
+AlphaFig$pval[4] <- coef(summary(piMn))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[5] <- shanHg$coefficients[2]
+AlphaFig$se[5] <- coef(summary(shanHg))[2, "Std. Error"]
+AlphaFig$pval[5] <- coef(summary(shanHg))[2, "Pr(>|t|)"]
+AlphaFig$beta[6] <- piHg$coefficients[2]
+AlphaFig$se[6] <- coef(summary(piHg))[2, "Std. Error"]
+AlphaFig$pval[6] <- coef(summary(piHg))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[7] <- shanPb$coefficients[2]
+AlphaFig$se[7] <- coef(summary(shanPb))[2, "Std. Error"]
+AlphaFig$pval[7] <- coef(summary(shanPb))[2, "Pr(>|t|)"]
+AlphaFig$beta[8] <- piPb$coefficients[2]
+AlphaFig$se[8] <- coef(summary(piPb))[2, "Std. Error"]
+AlphaFig$pval[8] <- coef(summary(piPb))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[9] <- shanSe$coefficients[2]
+AlphaFig$se[9] <- coef(summary(shanSe))[2, "Std. Error"]
+AlphaFig$pval[9] <- coef(summary(shanSe))[2, "Pr(>|t|)"]
+AlphaFig$beta[10] <- piSe$coefficients[2]
+AlphaFig$se[10] <- coef(summary(piSe))[2, "Std. Error"]
+AlphaFig$pval[10] <- coef(summary(piSe))[2, "Pr(>|t|)"]
+
+AlphaFig$ci_low <- AlphaFig$beta-1.96*AlphaFig$se
+AlphaFig$ci_high <- AlphaFig$beta+1.96*AlphaFig$se
+AlphaFig$FDR_qval <- p.adjust(AlphaFig$pval, method = "fdr")
+```
+
+#Alpha diversity-Male (Table S6)
+```{r}
+#install.packages("ggpmisc")
+library(ggpmisc)
+
+#shannonrichness
+summary(shanCd <- lm(diversity_shannon ~ Cd_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(shanCd,which=1:4,main="regression diagnose_Cd_c~Shannon")
+
+summary(shanMn <- lm(diversity_shannon ~ Mn_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(shanMn,which=1:4,main="regression diagnose_Mn_c~Shannon")
+
+summary(shanHg <- lm(diversity_shannon ~ Hg_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates, Sex=="Male")))
+
+summary(shanPb <- lm(diversity_shannon ~ Pb_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates, Sex=="Male")))
+
+summary(shanSe <- lm(diversity_shannon ~ Se_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Male")))
+
+
+#pielouevenness
+summary(piCd <- lm(pielou ~ Cd_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(piCd,which=1:4,main="regression diagnose_Cd_c~Pielou")
+summary(piMn <- lm(pielou ~ Mn_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Male")))
+summary(piHg <- lm(pielou ~ Hg_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates, Sex=="Male")))
+summary(piPb <- lm(pielou ~ Pb_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates, Sex=="Male")))
+summary(piSe <- lm(pielou ~ Se_c+Breastfeed+Gestational_age+Family_income_Y6, data=subset(dataframewithcovariates_Mn, Sex=="Male")))
+
+AlphaFig <- data.frame(Method = factor(),
+                       Exposure = factor(),
+                       beta = numeric(),
+                       se = numeric(),
+                       ci_low=numeric(),
+                       ci_high=numeric(),
+                       pval=numeric(),
+                       FDR_qval=numeric(),
+                       stringsAsFactors=FALSE)
+
+AlphaFig[1:10,] <- NA
+AlphaFig$Method <- rep(c("Shannon","Pielou"))
+AlphaFig$Method <- factor(AlphaFig$Method, levels = c("Shannon", "Pielou"))
+
+AlphaFig$Exposure <- c("Cd","Cd","Mn","Mn","Hg","Hg","Pb","Pb","Se","Se")
+
+###
+AlphaFig$beta[1] <- shanCd$coefficients[2]
+AlphaFig$se[1] <- coef(summary(shanCd))[2, "Std. Error"]
+AlphaFig$pval[1] <- coef(summary(shanCd))[2, "Pr(>|t|)"]
+AlphaFig$beta[2] <- piCd$coefficients[2]
+AlphaFig$se[2] <- coef(summary(piCd))[2, "Std. Error"]
+AlphaFig$pval[2] <- coef(summary(piCd))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[3] <- shanMn$coefficients[2]
+AlphaFig$se[3] <- coef(summary(shanMn))[2, "Std. Error"]
+AlphaFig$pval[3] <- coef(summary(shanMn))[2, "Pr(>|t|)"]
+AlphaFig$beta[4] <- piMn$coefficients[2]
+AlphaFig$se[4] <- coef(summary(piMn))[2, "Std. Error"]
+AlphaFig$pval[4] <- coef(summary(piMn))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[5] <- shanHg$coefficients[2]
+AlphaFig$se[5] <- coef(summary(shanHg))[2, "Std. Error"]
+AlphaFig$pval[5] <- coef(summary(shanHg))[2, "Pr(>|t|)"]
+AlphaFig$beta[6] <- piHg$coefficients[2]
+AlphaFig$se[6] <- coef(summary(piHg))[2, "Std. Error"]
+AlphaFig$pval[6] <- coef(summary(piHg))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[7] <- shanPb$coefficients[2]
+AlphaFig$se[7] <- coef(summary(shanPb))[2, "Std. Error"]
+AlphaFig$pval[7] <- coef(summary(shanPb))[2, "Pr(>|t|)"]
+AlphaFig$beta[8] <- piPb$coefficients[2]
+AlphaFig$se[8] <- coef(summary(piPb))[2, "Std. Error"]
+AlphaFig$pval[8] <- coef(summary(piPb))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[9] <- shanSe$coefficients[2]
+AlphaFig$se[9] <- coef(summary(shanSe))[2, "Std. Error"]
+AlphaFig$pval[9] <- coef(summary(shanSe))[2, "Pr(>|t|)"]
+AlphaFig$beta[10] <- piSe$coefficients[2]
+AlphaFig$se[10] <- coef(summary(piSe))[2, "Std. Error"]
+AlphaFig$pval[10] <- coef(summary(piSe))[2, "Pr(>|t|)"]
+
+AlphaFig$ci_low <- AlphaFig$beta-1.96*AlphaFig$se
+AlphaFig$ci_high <- AlphaFig$beta+1.96*AlphaFig$se
+AlphaFig$FDR_qval <- p.adjust(AlphaFig$pval, method = "fdr")
+
+
+
+```
+
