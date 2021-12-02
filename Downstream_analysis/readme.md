@@ -1,8 +1,7 @@
 Downstream analysis in R \
 
-Code file #1 \
-EHP_Shen_childexposure_childmicrobiome_1.Rmd \
-includes: \
+Code file #1 :EHP_Shen_childexposure_childmicrobiome_1.Rmd \
+includes:
 - Children exposure-children microbiome
 - data clean up
 - summary statistics
