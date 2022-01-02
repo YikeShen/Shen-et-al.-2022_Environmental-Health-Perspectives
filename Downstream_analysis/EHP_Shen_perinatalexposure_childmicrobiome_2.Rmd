@@ -1,0 +1,1649 @@
+---
+title: "EHP Shen Perinatal Exposure-Child Microbiome"
+author: "Yike Shen"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+
+## Readme:
+#You can not run this script without metadata, this aims to provide the workflow of our paper and offer pseudo code example for analysis. 
+# Request for data must go through approval with GESTE cohort, after approval I can share the original scripts with participants name and input processed sequence data. 
+#All participant names are de-identified as "PARTICIPANT_ID"; All name of the inputsheets are redacted as "INPUTDATA.csv"
+## End
+
+## Housekeeping
+```{r setup, include=FALSE}
+rm(list=ls())
+#install.packages("knitr")
+#install.packages("tidyverse")
+#install.packages("Matrix")
+#install.packages("pheatmap")
+#install.packages("vegan")
+#install.packages("labdsv")
+#install.packages("dendextend")
+#install.packages("ggsci")
+#install.packages("ade4")
+#BiocManager::install("phyloseq")
+#install.packages("corrplot")
+#install.packages("ggpubr")
+#install.packages("Maaslin2")
+#install.packages("grid")
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+#install.packages("ggpmisc")
+
+library(ggpmisc)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(Matrix)
+library("readxl")
+library(googleLanguageR)
+library("rmarkdown")
+library(dplyr)
+library(ggplot2)
+library(pheatmap) 
+library(vegan)
+library(RColorBrewer)
+library(permute)
+library(lattice)
+library(labdsv)
+library(dendextend)
+library("ggsci")
+library(ade4)
+library(phyloseq)
+library("ape")
+library("plyr")
+library(scales)
+library(Hmisc)
+library(corrplot)
+library(miscTools)
+library(gtools)
+library("ggpubr")
+library("gridExtra")
+library("gtable")
+library("grid")
+library("microbiome")
+library(Maaslin2)
+
+R.version.string
+#"R version 4.0.2 (2020-06-22)"
+```
+
+setwd("Path_to_your_WorkingDirectory")
+
+
+
+#Step1: Turn data into phyloseq object to calculate alpha diversity
+
+#Processing data, turn into physeq object, except for Cd&Pb-Beta (with outliers)
+```{r}
+rm(list=ls())
+OTUtableraw <- read_excel("GESTE_OTU.xlsx", sheet = "OTU_MotherD2021")
+OTUtable <- OTUtableraw[-1,]
+OTUtable <- OTUtable %>% filter(!grepl("Archaea",OTUID)) %>% filter(!grepl("Eukaryota",OTUID))
+OTU <- OTUtable %>% dplyr::select(-"OTUID")
+ROWNAMES <- OTU$FeatureID 
+OTU <- OTU[,-1]
+OTU <- OTU %>% as.matrix()
+row.names(OTU) <- ROWNAMES
+OTU[is.na(OTU)] <- 0
+OTU <- OTU %>% as.matrix()
+colnames(OTU) <- paste("P",colnames(OTU),sep="_")
+
+Taxonomy <- OTUtable %>% 
+  dplyr::select("OTUID")
+
+Taxonomy <- Taxonomy %>%
+  separate("OTUID",into=c("Domain","Phylum","Class","Order","Family","Genus","Species"),sep=";")
+
+TAX <- Taxonomy %>% as.data.frame() %>% 
+  mutate(Domain=gsub("d__","",Domain)) %>% 
+  mutate(Phylum=gsub("p__","",Phylum)) %>% 
+  mutate(Class=gsub("c__","",Class)) %>% 
+  mutate(Order=gsub("o__","",Order)) %>% 
+  mutate(Family=gsub("f__","",Family)) %>% 
+  mutate(Genus=gsub("g__","",Genus)) %>% 
+  mutate(Species=gsub("s__","",Species)) %>% 
+  as.matrix() %>% as.data.frame()
+
+TAX[is.na(TAX)] <- NA
+TAX <- apply(TAX, 2, function(x) gsub("^$|^ $", NA, x))
+TAX <- TAX %>% as.matrix()
+row.names(TAX) <- ROWNAMES
+
+
+map <- read_excel("GESTE_OTU.xlsx", sheet = "ENV_MotherD")
+
+SAMPLEIDROWNAMES <- map$SampleID
+map <- map %>% as.matrix() %>% as.data.frame()
+row.names(map) <- SAMPLEIDROWNAMES
+row.names(map) <- paste("P",row.names(map),sep="_")
+ROANAMESLISTSAMPLESID <- row.names(map)
+
+#remove PARTICIPANT_ID, the wrong reported data
+map <- map[!(row.names(map) %in% "PARTICIPANT_ID"), ]
+
+OTU=otu_table(OTU,taxa_are_rows = TRUE)
+rownames(TAX) <- row.names(OTU)
+TAX=tax_table(TAX)
+map <- map %>% as.data.frame()
+MAP <- sample_data(map)
+
+physeq = merge_phyloseq(OTU, TAX, MAP)
+Tree=rtree(ntaxa(physeq),rooted=TRUE,tip.label = taxa_names(physeq))
+
+physeq = phyloseq(OTU, TAX, MAP,Tree)
+#summarize_phyloseq(physeq)
+```
+
+#Processing data, turn into Cd-Beta_physeq object
+```{r}
+OTUtableraw_Cd <- read_excel("GESTE_OTU.xlsx", sheet = "OTU_MotherD2021")
+OTUtable_Cd <- OTUtableraw_Cd[-1,]
+OTUtable_Cd <- OTUtable_Cd %>% filter(!grepl("Archaea",OTUID)) %>% filter(!grepl("Eukaryota",OTUID))
+OTU_Cd <- OTUtable_Cd %>% dplyr::select(-"OTUID")
+ROWNAMES_Cd <- OTU_Cd$FeatureID 
+OTU_Cd <- OTU_Cd[,-1]
+OTU_Cd <- OTU_Cd %>% as.matrix()
+row.names(OTU_Cd) <- ROWNAMES_Cd
+OTU_Cd[is.na(OTU_Cd)] <- 0
+OTU_Cd <- OTU_Cd %>% as.matrix()
+colnames(OTU_Cd) <- paste("P",colnames(OTU_Cd),sep="_")
+
+Taxonomy_Cd <- OTUtable_Cd %>% 
+  dplyr::select("OTUID")
+
+Taxonomy_Cd <- Taxonomy_Cd %>%
+  separate("OTUID",into=c("Domain","Phylum","Class","Order","Family","Genus","Species"),sep=";")
+
+TAX_Cd <- Taxonomy_Cd %>% as.data.frame() %>% 
+  mutate(Domain=gsub("d__","",Domain)) %>% 
+  mutate(Phylum=gsub("p__","",Phylum)) %>% 
+  mutate(Class=gsub("c__","",Class)) %>% 
+  mutate(Order=gsub("o__","",Order)) %>% 
+  mutate(Family=gsub("f__","",Family)) %>% 
+  mutate(Genus=gsub("g__","",Genus)) %>% 
+  mutate(Species=gsub("s__","",Species)) %>% 
+  as.matrix() %>% as.data.frame()
+
+TAX_Cd[is.na(TAX_Cd)] <- NA
+TAX_Cd <- apply(TAX_Cd, 2, function(x) gsub("^$|^ $", NA, x))
+TAX_Cd <- TAX_Cd %>% as.matrix()
+row.names(TAX_Cd) <- ROWNAMES_Cd
+
+
+map_Cd <- read_excel("GESTE_OTU.xlsx", sheet = "ENV_MotherD")
+
+SAMPLEIDROWNAMES_Cd <- map_Cd$SampleID
+map_Cd <- map_Cd %>% as.matrix() %>% as.data.frame()
+row.names(map_Cd) <- SAMPLEIDROWNAMES_Cd
+row.names(map_Cd) <- paste("P",row.names(map_Cd),sep="_")
+ROANAMESLISTSAMPLESID_Cd <- row.names(map_Cd)
+
+#remove PARTICIPANT_ID, the wrong data
+map_Cd <- map_Cd[!(row.names(map_Cd) %in% "PARTICIPANT_ID"), ]
+#remove outliers
+map_Cd <- map_Cd[!(row.names(map_Cd) %in% "PARTICIPANT_ID"), ]
+map_Cd <- map_Cd[!(row.names(map_Cd) %in% "PARTICIPANT_ID"), ]
+
+OTU_Cd=otu_table(OTU_Cd,taxa_are_rows = TRUE)
+rownames(TAX_Cd) <- row.names(OTU_Cd)
+TAX_Cd=tax_table(TAX_Cd)
+map_Cd <- map_Cd %>% as.data.frame()
+MAP_Cd <- sample_data(map_Cd)
+
+physeq_Cd = merge_phyloseq(OTU_Cd, TAX_Cd, MAP_Cd)
+Tree_Cd=rtree(ntaxa(physeq_Cd),rooted=TRUE,tip.label = taxa_names(physeq_Cd))
+
+physeq_Cd = phyloseq(OTU_Cd, TAX_Cd, MAP_Cd,Tree_Cd)
+
+```
+
+###Pb-phyloseq object
+```{r}
+OTUtableraw_Pb <- read_excel("GESTE_OTU.xlsx", sheet = "OTU_MotherD2021")
+OTUtable_Pb <- OTUtableraw_Pb[-1,]
+OTUtable_Pb <- OTUtable_Pb %>% filter(!grepl("Archaea",OTUID)) %>% filter(!grepl("Eukaryota",OTUID))
+OTU_Pb <- OTUtable_Pb %>% dplyr::select(-"OTUID")
+ROWNAMES_Pb <- OTU_Pb$FeatureID 
+OTU_Pb <- OTU_Pb[,-1]
+OTU_Pb <- OTU_Pb %>% as.matrix()
+row.names(OTU_Pb) <- ROWNAMES_Pb
+OTU_Pb[is.na(OTU_Pb)] <- 0
+OTU_Pb <- OTU_Pb %>% as.matrix()
+colnames(OTU_Pb) <- paste("P",colnames(OTU_Pb),sep="_")
+
+Taxonomy_Pb <- OTUtable_Pb %>% 
+  dplyr::select("OTUID")
+
+Taxonomy_Pb <- Taxonomy_Pb %>%
+  separate("OTUID",into=c("Domain","Phylum","Class","Order","Family","Genus","Species"),sep=";")
+
+TAX_Pb <- Taxonomy_Pb %>% as.data.frame() %>% 
+  mutate(Domain=gsub("d__","",Domain)) %>% 
+  mutate(Phylum=gsub("p__","",Phylum)) %>% 
+  mutate(Class=gsub("c__","",Class)) %>% 
+  mutate(Order=gsub("o__","",Order)) %>% 
+  mutate(Family=gsub("f__","",Family)) %>% 
+  mutate(Genus=gsub("g__","",Genus)) %>% 
+  mutate(Species=gsub("s__","",Species)) %>% 
+  as.matrix() %>% as.data.frame()
+
+TAX_Pb[is.na(TAX_Pb)] <- NA
+TAX_Pb <- apply(TAX_Pb, 2, function(x) gsub("^$|^ $", NA, x))
+TAX_Pb <- TAX_Pb %>% as.matrix()
+row.names(TAX_Pb) <- ROWNAMES_Pb
+
+map_Pb <- read_excel("GESTE_OTU.xlsx", sheet = "ENV_MotherD")
+
+SAMPLEIDROWNAMES_Pb <- map_Pb$SampleID
+map_Pb <- map_Pb %>% as.matrix() %>% as.data.frame()
+row.names(map_Pb) <- SAMPLEIDROWNAMES_Pb
+row.names(map_Pb) <- paste("P",row.names(map_Pb),sep="_")
+ROANAMESLISTSAMPLESID_Pb <- row.names(map_Pb)
+
+#remove PARTICIPANT_ID, the wrong data
+map_Pb <- map_Pb[!(row.names(map_Pb) %in% "PARTICIPANT_ID"), ]
+#remove outliers
+map_Pb <- map_Pb[!(row.names(map_Pb) %in% "PARTICIPANT_ID"), ]
+
+OTU_Pb=otu_table(OTU_Pb,taxa_are_rows = TRUE)
+rownames(TAX_Pb) <- row.names(OTU_Pb)
+TAX_Pb=tax_table(TAX_Pb)
+map_Pb <- map_Pb %>% as.data.frame()
+MAP_Pb <- sample_data(map_Pb)
+
+physeq_Pb = merge_phyloseq(OTU_Pb, TAX_Pb, MAP_Pb)
+Tree_Pb=rtree(ntaxa(physeq_Pb),rooted=TRUE,tip.label = taxa_names(physeq_Pb))
+
+physeq_Pb = phyloseq(OTU_Pb, TAX_Pb, MAP_Pb,Tree_Pb)
+```
+
+#Alpha Diversity calculation
+```{r}
+AlphaEvenness <- evenness(physeq, 'pielou')
+AlphaRichness <- alpha(physeq,'shannon')
+ALPHANEW <- cbind(map,AlphaRichness,AlphaEvenness) 
+#table1::table1(~., data = ALPHANEW)
+```
+
+#Step2, cleanup metadata 
+## Data tidying 
+```{r}
+GESTERAW <- read.csv("GESTERAWMothers.csv")
+GESTESEX <- read.csv("GESTEY6RAW.csv") %>% select(record_id,sexe_enfan)
+
+IDLIST <- GESTERAW[,1] %>% as.data.frame()
+Deliverycon <- GESTERAW[,c(7:11)] %>% as.data.frame()
+ChildMetalRaw <- c(IDLIST,Deliverycon) %>% as.data.frame()
+
+ChildMetalprocessing<- apply(ChildMetalRaw, 2, function(x) gsub("^$|^ $", NA, x)) %>% as.data.frame()
+
+ChildMetalprocess <- ChildMetalprocessing %>% as.tibble() %>%
+  dplyr::rename(Cd_D=cd_acc) %>% 
+  dplyr::rename(Mn_D=mn_acc) %>% 
+  dplyr::rename(Hg_D=hgt_acc) %>% 
+  dplyr::rename(Pb_D=pb_acc) %>% 
+  dplyr::rename(Se_D=se_acc) %>% 
+  dplyr::rename(SampleID=".")
+
+#more covariates from the other datasheet
+Covariates <- read.csv("Mothercovariates.csv")
+mothercovariates <- Covariates[,c(15:197,198)]
+GESTERAWwcovaraites <- cbind(ChildMetalprocess,mothercovariates)
+GESTERAWwcovaraites <- GESTERAWwcovaraites[-1,]
+GESTERAWwcovaraites <- cbind(GESTERAWwcovaraites,GESTESEX)
+
+#############Diagnoses################
+#diag_gross__0:any
+#diag_gross__1:Gestational Diabetes
+#diag_gross__2:Preeclampsia
+#diag_gross__3:Asthma
+#diag_gross__4:Allergies
+#diag_gross__5: High Blood Pressure
+#diag_gross__6: thyroid disease
+#diag_gross__7: strep groupB
+#diag_gross__8: diabetes (type1 or2)
+#diag_gross__9: other
+
+#pregnancy related diagnoses
+diagnosesprg <- GESTERAWwcovaraites[,8:9]
+diagnosesprg[] <- lapply(diagnosesprg, function(x) as.numeric(as.character(x)))
+diagnosesprglist <- rowSums(diagnosesprg) %>% as.data.frame()
+colnames(diagnosesprglist) <- "DiagnoseIndex_prgnancy"
+
+#preexisting diagnoses
+diagnoses <- GESTERAWwcovaraites[,10:16]
+diagnoses[] <- lapply(diagnoses, function(x) as.numeric(as.character(x)))
+diagnoseslist <- rowSums(diagnoses) %>% as.data.frame()
+colnames(diagnoseslist) <- "DiagnoseIndex_preexisting"
+
+diagnoseTWO <- cbind(diagnosesprglist,diagnoseslist)
+diagnoseTWO[] <- lapply(diagnoseTWO, function(x) as.factor(as.numeric(x)))
+
+####################Exposure###############
+riskfactors <- GESTERAWwcovaraites[,46:157]
+riskfactors[] <- lapply(riskfactors, function(x) as.numeric(as.character(x)))
+
+num_column2<-112
+num_row2<-86
+
+sum_df<-data.frame(matrix(0,nrow=86,ncol=28))
+for (i in 1:num_row2){
+  for (j in 1:((num_column2)/4)){
+    Process_vector<-riskfactors[i, c(j*4-3,j*4-2,j*4-1,j*4)]
+      sumdiagnose <- rowSums(Process_vector)
+    sum_df[i,j] = sumdiagnose
+  }
+}
+   
+Colnamesexposure <- cbind("dust","smoke","emanations","odors","combustion","leather_dust","printing_inks", "metal_dust", "tars/bitumen", "oils/grease", "fuel/heating_oil","non-flammable_sheaths","fertilizers", "pesticides","paints", "photographic_goods", "colles","solvent/degreasing_fluids", "radiation", "industrial_phamaceuticals", "industrial_food_products", "antioxidnts","dyes", "heat", "cold", "temp","humidity", "noise")
+
+colnames(sum_df) <- Colnamesexposure
+sum_df[] <- lapply(sum_df, function(x) as.factor(as.numeric(x)))
+
+importantcov <- GESTERAWwcovaraites %>% select(SampleID,acc_cs,bmipostpregn,revenu_delivery,ga_wks_bb,sexe_enfan) %>% 
+  dplyr::rename(Delivery_mode=acc_cs) %>% 
+  dplyr::rename(BMI_delivery=bmipostpregn) %>% 
+  dplyr::rename(Family_Income=revenu_delivery) %>% 
+  dplyr::rename(Gestational_age=ga_wks_bb) %>% 
+  dplyr::rename(Sex=sexe_enfan)
+
+importantcov <- cbind(importantcov,diagnoseTWO)
+#write.csv(incomedelivery,"incomedelivery.csv")
+
+#Missing income, impute from year6 income, for those without year6 income, impute with median 65000
+importantcov[11,4] <- INCOME_NUMBER #participant PARTICIPANT_ID
+importantcov[16,4] <- INCOME_NUMBER #participant PARTICIPANT_ID
+importantcov[32,4] <- INCOME_NUMBER#participant PARTICIPANT_ID, NA fron Y6 impute with median
+importantcov[35,4] <- INCOME_NUMBER#participant PARTICIPANT_ID
+importantcov[62,4] <- INCOME_NUMBER #participant PARTICIPANT_ID
+importantcov[82,4] <- INCOME_NUMBER#participant PARTICIPANT_ID, NA from Y6 impute with median
+
+importantcov$Sex[importantcov$Sex == "1"] <- 'Female'
+importantcov$Sex[importantcov$Sex == "2"] <- 'Male'
+
+chisq.test(table(importantcov$DiagnoseIndex_prgnancy, importantcov$DiagnoseIndex_preexisting))
+
+###############
+importantcov$DiagnoseIndex_prgnancy <- as.character(importantcov$DiagnoseIndex_prgnancy)
+importantcov$DiagnoseIndex_prgnancy[importantcov$DiagnoseIndex_prgnancy == "1"] <- 'Yes'
+importantcov$DiagnoseIndex_prgnancy[importantcov$DiagnoseIndex_prgnancy == "2"] <- 'Yes'
+importantcov$DiagnoseIndex_prgnancy[importantcov$DiagnoseIndex_prgnancy == "0"] <- 'No'
+
+importantcov$DiagnoseIndex_preexisting <- as.character(importantcov$DiagnoseIndex_preexisting)
+importantcov$DiagnoseIndex_preexisting[importantcov$DiagnoseIndex_preexisting == "1"] <- 'Yes'
+importantcov$DiagnoseIndex_preexisting[importantcov$DiagnoseIndex_preexisting == "2"] <- 'Yes'
+importantcov$DiagnoseIndex_preexisting[importantcov$DiagnoseIndex_preexisting == "3"] <- 'Yes'
+importantcov$DiagnoseIndex_preexisting[importantcov$DiagnoseIndex_preexisting == "0"] <- 'No'
+
+Socio <- GESTERAWwcovaraites %>% select(SampleID,Cd_D,Mn_D,Hg_D,Pb_D, Se_D,age_deliverymoth)
+
+covariatesmotherdelivery <- cbind(Socio,importantcov)
+Socioprocessing <- covariatesmotherdelivery[complete.cases(covariatesmotherdelivery[ , 2:6]),]
+Socioprocessing <- Socioprocessing[,-c(2:6)]
+Socioprocessing <- Socioprocessing %>% as.tibble() %>% dplyr::rename(Age=age_deliverymoth)
+Socioprocessing <- Socioprocessing[,-3]
+row.names(Socioprocessing) <- Socioprocessing$SampleID
+Socioprocessing[,c(1:2,4:6)] <- lapply(Socioprocessing[,c(1:2,4:6)], function(x) as.numeric(as.character(x)))
+Socioprocessing$Delivery_mode[Socioprocessing$Delivery_mode == "1"] <- 'Vaginal'
+Socioprocessing$Delivery_mode[Socioprocessing$Delivery_mode == "2"] <- 'C-Section'
+row.names(Socioprocessing) <- Socioprocessing$SampleID
+
+#remove PARTICIPANT_ID, the wrong data
+Socioprocessing <- Socioprocessing[!(row.names(Socioprocessing) %in% "PARTICIPANT_ID"), ]
+
+Socioprocessingxxx <- Socioprocessing[,-1]
+table1::table1(~ ., data = Socioprocessingxxx[,-c(1,5)])
+table1::table1(~ ., data = ALPHANEW[,-c(1,7,8)])
+
+#test association with alpha diversity, metal concentration
+Correlationscreening <- cbind(ALPHANEW,Socioprocessing)
+Correlationscreening <- Correlationscreening[,c(-1,-9)]
+
+write.csv(importantcov,"maternalvariables.csv")
+write.csv(Socio,"maternalmetal0221.csv")
+
+```
+
+
+###diet&antibiotics in response to reviewers question
+```{r}
+DIET_RAW <- read_excel("EHP_dietanti.xlsx", sheet = "6Y_supp")
+DIET_RAW <- DIET_RAW %>% 
+  dplyr::rename(SampleID=record_id)
+
+DIET_Processing <- match_df(DIET_RAW,Socioprocessing, on ="SampleID")
+
+DIET_Processing <- DIET_Processing %>% select(SampleID,medication,autremedic,intoleranc,troubles_d)
+DIET_Processing <- DIET_Processing %>%
+  dplyr::rename(Regular_medication=medication) %>% 
+  dplyr::rename(Natural_medication=autremedic) %>% 
+  dplyr::rename(Food_intolerance=intoleranc) %>% 
+  dplyr::rename(Digestion_issues=troubles_d)
+
+DIET_Processing$Regular_medication[DIET_Processing$Regular_medication == "1"] <- 'Yes'
+DIET_Processing$Regular_medication[DIET_Processing$Regular_medication == "0"] <- 'No'
+
+DIET_Processing$Natural_medication[DIET_Processing$Natural_medication == "1"] <- 'Yes'
+DIET_Processing$Natural_medication[DIET_Processing$Natural_medication == "0"] <- 'No'
+
+DIET_Processing$Food_intolerance[DIET_Processing$Food_intolerance == "1"] <- 'Yes'
+DIET_Processing$Food_intolerance[DIET_Processing$Food_intolerance == "0"] <- 'No'
+#2
+DIET_Processing$Food_intolerance[DIET_Processing$Food_intolerance == "2"] <- 'No'
+#NA
+DIET_Processing[23,4] <- 'No'
+DIET_Processing[55,4] <- 'No'
+DIET_Processing[69,4] <- 'No'
+
+DIET_Processing$Digestion_issues[DIET_Processing$Digestion_issues == "1"] <- 'Yes'
+DIET_Processing$Digestion_issues[DIET_Processing$Digestion_issues == "0"] <- 'No'
+#PARTICIPANT_ID_digestive disorder
+DIET_Processing[9,5] <- "Yes"
+DIET_Processing$Digestion_issues[DIET_Processing$Digestion_issues == "2"] <- 'No'
+#NAs
+DIET_Processing[2,5] <- "No"
+DIET_Processing[23,5] <- "No"
+DIET_Processing[55,5] <- "No"
+DIET_Processing[69,5] <- "No"
+```
+
+
+#Covariates screening (Table S2)
+```{r}
+Correlationscreening <- Correlationscreening %>% as.data.frame()
+Covariate_df <- cbind(Correlationscreening,DIET_Processing)
+
+summary(shanage <- lm(diversity_shannon ~ Age, data=Covariate_df))
+summary(shanDelivery_mode <- lm(diversity_shannon ~ Delivery_mode, data=Covariate_df))
+summary(shanBMI_delivery <- lm(diversity_shannon ~ BMI_delivery, data=Covariate_df))
+summary(shanFamily_Income <- lm(diversity_shannon ~ Family_Income, data=Covariate_df))
+summary(shanGestational_age <- lm(diversity_shannon ~ Gestational_age, data=Covariate_df))
+summary(shanSex <- lm(diversity_shannon ~ Sex, data=Covariate_df))
+summary(shanDiagnoseIndex_prgnancy <- lm(diversity_shannon ~ DiagnoseIndex_prgnancy, data=Covariate_df))
+summary(shanDiagnoseIndex_preexisting <- lm(diversity_shannon ~ DiagnoseIndex_preexisting, data=Covariate_df))
+summary(shanChildren_Regularmedication <- lm(diversity_shannon ~ Regular_medication, data=Covariate_df))
+summary(shanChildren_Natural_medication <- lm(diversity_shannon ~ Natural_medication, data=Covariate_df))
+summary(shanChildren_Food_intolerance <- lm(diversity_shannon ~ Food_intolerance, data=Covariate_df))
+summary(shanChildren_Digestion_issues <- lm(diversity_shannon ~ Digestion_issues, data=Covariate_df))
+
+summary(pielouage <- lm(pielou ~ Age, data=Covariate_df))
+summary(pielouDelivery_mode <- lm(pielou ~ Delivery_mode, data=Covariate_df))
+summary(pielouBMI_delivery <- lm(pielou ~ BMI_delivery, data=Covariate_df))
+summary(pielouFamily_Income <- lm(pielou ~ Family_Income, data=Covariate_df))
+summary(pielouGestational_age <- lm(pielou ~ Gestational_age, data=Covariate_df))
+summary(pielouSex <- lm(pielou ~ Sex, data=Covariate_df))
+summary(pielouDiagnoseIndex_prgnancy <- lm(pielou ~ DiagnoseIndex_prgnancy, data=Covariate_df))
+summary(pielouDiagnoseIndex_preexisting <- lm(pielou ~ DiagnoseIndex_preexisting, data=Covariate_df))
+summary(pielouChildren_Regularmedication <- lm(pielou ~ Regular_medication, data=Covariate_df))
+summary(pielouChildren_Natural_medication <- lm(pielou ~ Natural_medication, data=Covariate_df))
+summary(pielouChildren_Food_intolerance <- lm(pielou ~ Food_intolerance, data=Covariate_df))
+summary(pielouChildren_Digestion_issues <- lm(pielou ~ Digestion_issues, data=Covariate_df))
+
+CovarFig <- data.frame(DiversityMatrix = factor(),
+                       Covariates = factor(),
+                       Estimate = numeric(),
+                       p_value = numeric(),
+                       stringsAsFactors=FALSE)
+
+CovarFig[1:24,] <- NA
+CovarFig$DiversityMatrix <- rep(c("Shannon","Pielou"))
+
+CovarFig$Covariates <- c("Age","Age","Delivery_mode","Delivery_mode","BMI_delivery","BMI_delivery","Family_Income","Family_Income","Gestational_age","Gestational_age","Sex","Sex","DiagnoseIndex_prgnancy","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","DiagnoseIndex_preexisting","Children_Regularmedication","Children_Regularmedication","Children_Natural_medication","Children_Natural_medication","Food_intolerance","Food_intolerance","Digestion_issues","Digestion_issues")
+
+######ADD medication, diet, IBD
+CovarFig$p_value[1] <- coef(summary(shanage))["Age","Pr(>|t|)"]
+CovarFig$p_value[2] <- coef(summary(pielouage))["Age","Pr(>|t|)"]
+CovarFig$p_value[3] <- coef(summary(shanDelivery_mode))["Delivery_modeVaginal","Pr(>|t|)"]
+CovarFig$p_value[4] <- coef(summary(pielouDelivery_mode))["Delivery_modeVaginal","Pr(>|t|)"]
+CovarFig$p_value[5] <- coef(summary(shanBMI_delivery))["BMI_delivery","Pr(>|t|)"]
+CovarFig$p_value[6] <- coef(summary(pielouBMI_delivery))["BMI_delivery","Pr(>|t|)"]
+CovarFig$p_value[7] <- coef(summary(shanFamily_Income))["Family_Income","Pr(>|t|)"]
+CovarFig$p_value[8] <- coef(summary(pielouFamily_Income))["Family_Income","Pr(>|t|)"]
+CovarFig$p_value[9] <- coef(summary(shanGestational_age))["Gestational_age","Pr(>|t|)"]
+CovarFig$p_value[10] <- coef(summary(pielouGestational_age))["Gestational_age","Pr(>|t|)"]
+CovarFig$p_value[11] <- coef(summary(shanSex))["SexMale","Pr(>|t|)"]
+CovarFig$p_value[12] <- coef(summary(pielouSex))["SexMale","Pr(>|t|)"]
+CovarFig$p_value[13] <- coef(summary(shanDiagnoseIndex_prgnancy))["DiagnoseIndex_prgnancyYes","Pr(>|t|)"]
+CovarFig$p_value[14] <- coef(summary(pielouDiagnoseIndex_prgnancy))["DiagnoseIndex_prgnancyYes","Pr(>|t|)"]
+CovarFig$p_value[15] <- coef(summary(shanDiagnoseIndex_preexisting))["DiagnoseIndex_preexistingYes","Pr(>|t|)"]
+CovarFig$p_value[16] <- coef(summary(pielouDiagnoseIndex_preexisting))["DiagnoseIndex_preexistingYes","Pr(>|t|)"]
+CovarFig$p_value[17] <- coef(summary(shanChildren_Regularmedication))["Regular_medicationYes","Pr(>|t|)"]
+CovarFig$p_value[18] <- coef(summary(pielouChildren_Regularmedication))["Regular_medicationYes","Pr(>|t|)"]
+CovarFig$p_value[19] <- coef(summary(shanChildren_Natural_medication))["Natural_medicationYes","Pr(>|t|)"]
+CovarFig$p_value[20] <- coef(summary(pielouChildren_Natural_medication))["Natural_medicationYes","Pr(>|t|)"]
+CovarFig$p_value[21] <- coef(summary(shanChildren_Food_intolerance))["Food_intoleranceYes","Pr(>|t|)"]
+CovarFig$p_value[22] <- coef(summary(pielouChildren_Food_intolerance))["Food_intoleranceYes","Pr(>|t|)"]
+CovarFig$p_value[23] <- coef(summary(shanChildren_Digestion_issues))["Digestion_issuesYes","Pr(>|t|)"]
+CovarFig$p_value[24] <- coef(summary(pielouChildren_Digestion_issues))["Digestion_issuesYes","Pr(>|t|)"]
+
+CovarFig$Estimate[1] <- coef(summary(shanage))["Age","Estimate"]
+CovarFig$Estimate[2] <- coef(summary(pielouage))["Age","Estimate"]
+CovarFig$Estimate[3] <- coef(summary(shanDelivery_mode))["Delivery_modeVaginal","Estimate"]
+CovarFig$Estimate[4] <- coef(summary(pielouDelivery_mode))["Delivery_modeVaginal","Estimate"]
+CovarFig$Estimate[5] <- coef(summary(shanBMI_delivery))["BMI_delivery","Estimate"]
+CovarFig$Estimate[6] <- coef(summary(pielouBMI_delivery))["BMI_delivery","Estimate"]
+CovarFig$Estimate[7] <- coef(summary(shanFamily_Income))["Family_Income","Estimate"]
+CovarFig$Estimate[8] <- coef(summary(pielouFamily_Income))["Family_Income","Estimate"]
+CovarFig$Estimate[9] <- coef(summary(shanGestational_age))["Gestational_age","Estimate"]
+CovarFig$Estimate[10] <- coef(summary(pielouGestational_age))["Gestational_age","Estimate"]
+CovarFig$Estimate[11] <- coef(summary(shanSex))["SexMale","Estimate"]
+CovarFig$Estimate[12] <- coef(summary(pielouSex))["SexMale","Estimate"]
+CovarFig$Estimate[13] <- coef(summary(shanDiagnoseIndex_prgnancy))["DiagnoseIndex_prgnancyYes","Estimate"]
+CovarFig$Estimate[14] <- coef(summary(pielouDiagnoseIndex_prgnancy))["DiagnoseIndex_prgnancyYes","Estimate"]
+CovarFig$Estimate[15] <- coef(summary(shanDiagnoseIndex_preexisting))["DiagnoseIndex_preexistingYes","Estimate"]
+CovarFig$Estimate[16] <- coef(summary(pielouDiagnoseIndex_preexisting))["DiagnoseIndex_preexistingYes","Estimate"]
+CovarFig$Estimate[17] <- coef(summary(shanChildren_Regularmedication))["Regular_medicationYes","Estimate"]
+CovarFig$Estimate[18] <- coef(summary(pielouChildren_Regularmedication))["Regular_medicationYes","Estimate"]
+CovarFig$Estimate[19] <- coef(summary(shanChildren_Natural_medication))["Natural_medicationYes","Estimate"]
+CovarFig$Estimate[20] <- coef(summary(pielouChildren_Natural_medication))["Natural_medicationYes","Estimate"]
+CovarFig$Estimate[21] <- coef(summary(shanChildren_Food_intolerance))["Food_intoleranceYes","Estimate"]
+CovarFig$Estimate[22] <- coef(summary(pielouChildren_Food_intolerance))["Food_intoleranceYes","Estimate"]
+CovarFig$Estimate[23] <- coef(summary(shanChildren_Digestion_issues))["Digestion_issuesYes","Estimate"]
+CovarFig$Estimate[24] <- coef(summary(pielouChildren_Digestion_issues))["Digestion_issuesYes","Estimate"]
+```
+
+# Data tidying for perinatal metals (Table S1)
+```{r}
+Metalimpute <- ChildMetalprocess
+#Impute ND to DL/sqrt(2)
+##############Cadmium############
+Metalimpute$Cd_D <- as.numeric(Metalimpute$Cd_D)
+
+Cddensity <- ggplot(Metalimpute, aes(x=Cd_D)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666")+ggtitle("Cd")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Cadmium Concentration (nmol/L)", y="Density")
+Cddensity
+
+#############Mercury#################
+#Hg=0.6/sqrt(2)= 0.4242641(0.4)
+
+Metalimpute$Hg_D[Metalimpute$Hg_D == "0.5"] <- '0.4'
+Metalimpute$Hg_D <- as.numeric(Metalimpute$Hg_D)
+
+Hgdensity <- ggplot(Metalimpute, aes(x=Hg_D)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666")+ggtitle("Hg")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Mercury Concentration (nmol/L)", y="Density")
+Hgdensity
+
+
+Metalimpute$Mn_D <- as.numeric(Metalimpute$Mn_D)
+Mndensity <- ggplot(Metalimpute, aes(x=Mn_D)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Mn")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Manganese Concentration (nmol/L)", y="Density")
+Mndensity
+
+Metalimpute$Pb_D <- as.numeric(Metalimpute$Pb_D)
+Pbdensity <- ggplot(Metalimpute, aes(x=Pb_D)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Pb")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Lead Concentration (nmol/L)", y="Density")
+Pbdensity
+
+Metalimpute$Se_D <- as.numeric(Metalimpute$Se_D)
+Sedensity <- ggplot(Metalimpute, aes(x=Se_D)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Se")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Selenium Concentration (nmol/L)", y="Density")
+Sedensity
+library(gridExtra)
+grid.arrange(Pbdensity,Mndensity,Sedensity,Hgdensity,Cddensity,nrow=3
+                               ,top="Density Plot")
+
+write.csv(Metalimpute, file = "MotherDeliveryMetalcontinuous.csv")
+#summary_table(Metalimpute[,-1])
+```
+
+#Alpha Diversity index distribution
+```{r}
+Distributionshannon <- ggplot(ALPHANEW, aes(x=diversity_shannon)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Shannon Diversity")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Shannon Index", y="Density")
+Distributionshannon
+
+Distributionpielou <- ggplot(ALPHANEW, aes(x=pielou)) + 
+    geom_histogram(aes(y=..density..), sbinwidth=.5,
+                   colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666")+ggtitle("Pielou Evenness")+
+  theme(legend.position="top",axis.text=element_text(size=16),
+        axis.title=element_text(size=16),plot.title = element_text(size=22, hjust=0.5),text = element_text(size = 16),axis.text.x = element_text(angle = 0))+labs(x="Pielou Index", y="Density")
+Distributionpielou
+
+grid.arrange(Distributionshannon,Distributionpielou,nrow=2
+                               ,top="Alpha Diversity density plot_no transform")
+
+```
+
+#dataframe with different outlier removed
+```{r}
+#remove two outliers for Cd
+Correlationscreening_Cd <- Correlationscreening
+Correlationscreening_Cd <- Correlationscreening_Cd[!(row.names(Correlationscreening_Cd) %in% "PARTICIPANT_ID"), ]
+Correlationscreening_Cd <- Correlationscreening_Cd[!(row.names(Correlationscreening_Cd) %in% "PARTICIPANT_ID"), ]
+#remove one outlier for Pb
+Correlationscreening_Pb <- Correlationscreening
+Correlationscreening_Pb <- Correlationscreening_Pb[!(row.names(Correlationscreening_Pb) %in% "PARTICIPANT_ID"), ]
+```
+
+
+#Step3: Alpha diversity associations (Figure 2, Table S4)
+```{r}
+#shannonrichness
+summary(shanCd <- lm(diversity_shannon ~ Cd_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening_Cd))
+par(mfrow=c(2,2))
+plot(shanCd,which=1:4,main="regression diagnose_Cd_D_c~Shannon")
+
+summary(shanMn <- lm(diversity_shannon ~ Mn_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening))
+par(mfrow=c(2,2))
+plot(shanMn,which=1:4,main="regression diagnose_Mn_D_c~Shannon")
+
+summary(shanHg <- lm(diversity_shannon ~ Hg_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening))
+par(mfrow=c(2,2))
+plot(shanHg,which=1:4,main="regression diagnose_Hg_D_c~Shannon")
+
+summary(shanPb <- lm(diversity_shannon ~ Pb_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening_Pb))
+par(mfrow=c(2,2))
+plot(shanPb,which=1:4,main="regression diagnose_Pb_D_c~Shannon")
+
+summary(shanSe <- lm(diversity_shannon ~ Se_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening))
+par(mfrow=c(2,2))
+plot(shanSe,which=1:4,main="regression diagnose_Se_D_c~Shannon")
+
+#pielouevenness
+summary(piCd <- lm(pielou ~ Cd_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening_Cd))
+par(mfrow=c(2,2))
+plot(piCd,which=1:4,main="regression diagnose_Cd_D_c~Pielou")
+
+summary(piMn <- lm(pielou ~ Mn_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening))
+par(mfrow=c(2,2))
+plot(piMn,which=1:4,main="regression diagnose_Mn_D_c~Pielou")
+
+summary(piHg <- lm(pielou ~ Hg_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening))
+par(mfrow=c(2,2))
+plot(piHg,which=1:4,main="regression diagnose_Hg_D_c~Pielou")
+
+summary(piPb <- lm(pielou ~ Pb_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening_Pb))
+par(mfrow=c(2,2))
+plot(piPb,which=1:4,main="regression diagnose_Pb_D_c~Pielou")
+
+summary(piSe <- lm(pielou ~ Se_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening))
+par(mfrow=c(2,2))
+plot(piSe,which=1:4,main="regression diagnose_Se_D_c~Pielou")
+
+AlphaFig <- data.frame(Method = factor(),
+                       Exposure = factor(),
+                       beta = numeric(),
+                       se = numeric(),
+                       stringsAsFactors=FALSE)
+
+AlphaFig[1:10,] <- NA
+AlphaFig$Method <- rep(c("Shannon","Pielou"))
+AlphaFig$Method <- factor(AlphaFig$Method, levels = c("Shannon", "Pielou"))
+
+AlphaFig$Exposure <- c("Cd (nmol/L)","Cd (nmol/L)","Mn (nmol/L)","Mn (nmol/L)","Hg (nmol/L)","Hg (nmol/L)","Pb (umol/L)","Pb (umol/L)","Se (umol/L)","Se (umol/L)")
+
+AlphaFig$beta[1] <- shanCd$coefficients[2]
+AlphaFig$se[1] <- coef(summary(shanCd))[2, "Std. Error"]
+AlphaFig$pval[1] <- coef(summary(shanCd))[2, "Pr(>|t|)"]
+AlphaFig$beta[2] <- piCd$coefficients[2]
+AlphaFig$se[2] <- coef(summary(piCd))[2, "Std. Error"]
+AlphaFig$pval[2] <- coef(summary(piCd))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[3] <- shanMn$coefficients[2]
+AlphaFig$se[3] <- coef(summary(shanMn))[2, "Std. Error"]
+AlphaFig$pval[3] <- coef(summary(shanMn))[2, "Pr(>|t|)"]
+AlphaFig$beta[4] <- piMn$coefficients[2]
+AlphaFig$se[4] <- coef(summary(piMn))[2, "Std. Error"]
+AlphaFig$pval[4] <- coef(summary(piMn))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[5] <- shanHg$coefficients[2]
+AlphaFig$se[5] <- coef(summary(shanHg))[2, "Std. Error"] 
+AlphaFig$pval[5] <- coef(summary(shanHg))[2, "Pr(>|t|)"]
+AlphaFig$beta[6] <- piHg$coefficients[2]
+AlphaFig$se[6] <- coef(summary(piHg))[2, "Std. Error"]
+AlphaFig$pval[6] <- coef(summary(piHg))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[7] <- shanPb$coefficients[2]
+AlphaFig$se[7] <- coef(summary(shanPb))[2, "Std. Error"]
+AlphaFig$pval[7] <- coef(summary(shanPb))[2, "Pr(>|t|)"]
+AlphaFig$beta[8] <- piPb$coefficients[2]
+AlphaFig$se[8] <- coef(summary(piPb))[2, "Std. Error"]
+AlphaFig$pval[8] <- coef(summary(piPb))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[9] <- shanSe$coefficients[2]
+AlphaFig$se[9] <- coef(summary(shanSe))[2, "Std. Error"]
+AlphaFig$pval[9] <- coef(summary(shanSe))[2, "Pr(>|t|)"]
+AlphaFig$beta[10] <- piSe$coefficients[2]
+AlphaFig$se[10] <- coef(summary(piSe))[2, "Std. Error"]
+AlphaFig$pval[10] <- coef(summary(piSe))[2, "Pr(>|t|)"]
+
+AlphaFig$ci_low <- AlphaFig$beta-1.96*AlphaFig$se
+AlphaFig$ci_high <- AlphaFig$beta+1.96*AlphaFig$se
+#Pr(>|t|)
+AlphaFig$FDR_qval <- p.adjust(AlphaFig$pval, method = "fdr")
+
+Alphasummary <- AlphaFig %>% select(-se) %>% 
+  dplyr::rename(Metals=Exposure) %>% 
+  dplyr::rename(coef=beta) 
+
+Alphasummary[,3:7] <- Alphasummary[,3:7] %>% round(3)
+write.csv(Alphasummary,"Alphasummarymotherchildren.csv")
+
+AlphaFigure2 <- ggplot(AlphaFig, aes(Method, beta), group=Exposure) +
+                geom_point(size = 3,  position = position_dodge(width = 1)) +
+                geom_errorbar(data = AlphaFig, aes(ymin = beta - 1.96*se,
+                                  ymax = beta + 1.96*se, linetype = NULL),
+                              width = 0.3, size =0.6,
+                              position=position_dodge(width=1),
+                              group = AlphaFig$Exposure) +
+                geom_hline(yintercept = 0, size = 1) +
+                scale_x_discrete(name = "Alpha Diversity Indices", labels = c("Shannon","Pielou")) +
+                scale_y_continuous(name = "Effect Estimate") +
+                theme_bw() +theme(panel.grid.major =element_blank(), 
+                      panel.grid.minor =element_blank(),
+                      axis.text = element_text(size = 18),
+                      axis.title = element_text(size = 18),plot.title = element_text(size=18, hjust=0.5),text = element_text(size = 16)) +
+                facet_wrap( ~ Exposure,scales = "free") +
+                theme(strip.background = element_rect(fill = "white", color = "black", size = 1),
+                      strip.text = element_text(size = 18))+ggtitle("Perinatal Exposure - Child Microbiome")+
+                theme(plot.title = element_text(size=22,hjust = 0.5))
+AlphaFigure2
+
+```
+
+#Sensitivity analysis
+#Alpha diversity-Female (Table S6)
+```{r}
+#shannonrichness
+summary(shanCd <- lm(diversity_shannon ~ Cd_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening_Cd, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(shanCd,which=1:4,main="regression diagnose_Cd_D_c~Shannon")
+
+summary(shanMn <- lm(diversity_shannon ~ Mn_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(shanMn,which=1:4,main="regression diagnose_Mn_D_c~Shannon")
+
+summary(shanHg <- lm(diversity_shannon ~ Hg_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(shanHg,which=1:4,main="regression diagnose_Hg_D_c~Shannon")
+
+summary(shanPb <- lm(diversity_shannon ~ Pb_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening_Pb, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(shanPb,which=1:4,main="regression diagnose_Pb_D_c~Shannon")
+
+summary(shanSe <- lm(diversity_shannon ~ Se_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, subset(Correlationscreening, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(shanSe,which=1:4,main="regression diagnose_Se_D_c~Shannon")
+
+#pielouevenness
+summary(piCd <- lm(pielou ~ Cd_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening_Cd, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(piCd,which=1:4,main="regression diagnose_Cd_D_c~Pielou")
+
+summary(piMn <- lm(pielou ~ Mn_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(piMn,which=1:4,main="regression diagnose_Mn_D_c~Pielou")
+
+summary(piHg <- lm(pielou ~ Hg_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(piHg,which=1:4,main="regression diagnose_Hg_D_c~Pielou")
+
+summary(piPb <- lm(pielou ~ Pb_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening_Pb, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(piPb,which=1:4,main="regression diagnose_Pb_D_c~Pielou")
+
+summary(piSe <- lm(pielou ~ Se_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Female")))
+par(mfrow=c(2,2))
+plot(piSe,which=1:4,main="regression diagnose_Se_D_c~Pielou")
+
+AlphaFig <- data.frame(Method = factor(),
+                       Exposure = factor(),
+                       beta = numeric(),
+                       se = numeric(),
+                       stringsAsFactors=FALSE)
+
+AlphaFig[1:10,] <- NA
+AlphaFig$Method <- rep(c("Shannon","Pielou"))
+AlphaFig$Method <- factor(AlphaFig$Method, levels = c("Shannon", "Pielou"))
+
+AlphaFig$Exposure <- c("Cd","Cd","Mn","Mn","Hg","Hg","Pb","Pb","Se","Se")
+
+AlphaFig$beta[1] <- shanCd$coefficients[2]
+AlphaFig$se[1] <- coef(summary(shanCd))[2, "Std. Error"]
+AlphaFig$pval[1] <- coef(summary(shanCd))[2, "Pr(>|t|)"]
+AlphaFig$beta[2] <- piCd$coefficients[2]
+AlphaFig$se[2] <- coef(summary(piCd))[2, "Std. Error"]
+AlphaFig$pval[2] <- coef(summary(piCd))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[3] <- shanMn$coefficients[2]
+AlphaFig$se[3] <- coef(summary(shanMn))[2, "Std. Error"]
+AlphaFig$pval[3] <- coef(summary(shanMn))[2, "Pr(>|t|)"]
+AlphaFig$beta[4] <- piMn$coefficients[2]
+AlphaFig$se[4] <- coef(summary(piMn))[2, "Std. Error"]
+AlphaFig$pval[4] <- coef(summary(piMn))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[5] <- shanHg$coefficients[2]
+AlphaFig$se[5] <- coef(summary(shanHg))[2, "Std. Error"] 
+AlphaFig$pval[5] <- coef(summary(shanHg))[2, "Pr(>|t|)"]
+AlphaFig$beta[6] <- piHg$coefficients[2]
+AlphaFig$se[6] <- coef(summary(piHg))[2, "Std. Error"]
+AlphaFig$pval[6] <- coef(summary(piHg))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[7] <- shanPb$coefficients[2]
+AlphaFig$se[7] <- coef(summary(shanPb))[2, "Std. Error"]
+AlphaFig$pval[7] <- coef(summary(shanPb))[2, "Pr(>|t|)"]
+AlphaFig$beta[8] <- piPb$coefficients[2]
+AlphaFig$se[8] <- coef(summary(piPb))[2, "Std. Error"]
+AlphaFig$pval[8] <- coef(summary(piPb))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[9] <- shanSe$coefficients[2]
+AlphaFig$se[9] <- coef(summary(shanSe))[2, "Std. Error"]
+AlphaFig$pval[9] <- coef(summary(shanSe))[2, "Pr(>|t|)"]
+AlphaFig$beta[10] <- piSe$coefficients[2]
+AlphaFig$se[10] <- coef(summary(piSe))[2, "Std. Error"]
+AlphaFig$pval[10] <- coef(summary(piSe))[2, "Pr(>|t|)"]
+
+AlphaFig$ci_low <- AlphaFig$beta-1.96*AlphaFig$se
+AlphaFig$ci_high <- AlphaFig$beta+1.96*AlphaFig$se
+#Pr(>|t|)
+AlphaFig$FDR_qval <- p.adjust(AlphaFig$pval, method = "fdr")
+
+Alphasummary <- AlphaFig %>% select(-se) %>% 
+  dplyr::rename(Metals=Exposure) %>% 
+  dplyr::rename(coef=beta) 
+
+Alphasummary[,3:7] <- Alphasummary[,3:7] %>% round(3)
+#write.csv(Alphasummary,"Alphasummarymotherchildren_FEMALE.csv")
+```
+
+#Sensitivity analysis
+#Alpha diversity-Male (Table S6)
+```{r}
+#shannonrichness
+summary(shanCd <- lm(diversity_shannon ~ Cd_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening_Cd, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(shanCd,which=1:4,main="regression diagnose_Cd_D_c~Shannon")
+
+summary(shanMn <- lm(diversity_shannon ~ Mn_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(shanMn,which=1:4,main="regression diagnose_Mn_D_c~Shannon")
+
+summary(shanHg <- lm(diversity_shannon ~ Hg_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(shanHg,which=1:4,main="regression diagnose_Hg_D_c~Shannon")
+
+summary(shanPb <- lm(diversity_shannon ~ Pb_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening_Pb, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(shanPb,which=1:4,main="regression diagnose_Pb_D_c~Shannon")
+
+summary(shanSe <- lm(diversity_shannon ~ Se_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, subset(Correlationscreening, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(shanSe,which=1:4,main="regression diagnose_Se_D_c~Shannon")
+
+#pielouevenness
+summary(piCd <- lm(pielou ~ Cd_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening_Cd, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(piCd,which=1:4,main="regression diagnose_Cd_D_c~Pielou")
+
+summary(piMn <- lm(pielou ~ Mn_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(piMn,which=1:4,main="regression diagnose_Mn_D_c~Pielou")
+
+summary(piHg <- lm(pielou ~ Hg_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(piHg,which=1:4,main="regression diagnose_Hg_D_c~Pielou")
+
+summary(piPb <- lm(pielou ~ Pb_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening_Pb, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(piPb,which=1:4,main="regression diagnose_Pb_D_c~Pielou")
+
+summary(piSe <- lm(pielou ~ Se_D_c+Delivery_mode+BMI_delivery+Delivery_mode+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Family_Income, data=subset(Correlationscreening, Sex=="Male")))
+par(mfrow=c(2,2))
+plot(piSe,which=1:4,main="regression diagnose_Se_D_c~Pielou")
+
+AlphaFig <- data.frame(Method = factor(),
+                       Exposure = factor(),
+                       beta = numeric(),
+                       se = numeric(),
+                       stringsAsFactors=FALSE)
+
+AlphaFig[1:10,] <- NA
+AlphaFig$Method <- rep(c("Shannon","Pielou"))
+AlphaFig$Method <- factor(AlphaFig$Method, levels = c("Shannon", "Pielou"))
+
+AlphaFig$Exposure <- c("Cd","Cd","Mn","Mn","Hg","Hg","Pb","Pb","Se","Se")
+
+AlphaFig$beta[1] <- shanCd$coefficients[2]
+AlphaFig$se[1] <- coef(summary(shanCd))[2, "Std. Error"]
+AlphaFig$pval[1] <- coef(summary(shanCd))[2, "Pr(>|t|)"]
+AlphaFig$beta[2] <- piCd$coefficients[2]
+AlphaFig$se[2] <- coef(summary(piCd))[2, "Std. Error"]
+AlphaFig$pval[2] <- coef(summary(piCd))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[3] <- shanMn$coefficients[2]
+AlphaFig$se[3] <- coef(summary(shanMn))[2, "Std. Error"]
+AlphaFig$pval[3] <- coef(summary(shanMn))[2, "Pr(>|t|)"]
+AlphaFig$beta[4] <- piMn$coefficients[2]
+AlphaFig$se[4] <- coef(summary(piMn))[2, "Std. Error"]
+AlphaFig$pval[4] <- coef(summary(piMn))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[5] <- shanHg$coefficients[2]
+AlphaFig$se[5] <- coef(summary(shanHg))[2, "Std. Error"] 
+AlphaFig$pval[5] <- coef(summary(shanHg))[2, "Pr(>|t|)"]
+AlphaFig$beta[6] <- piHg$coefficients[2]
+AlphaFig$se[6] <- coef(summary(piHg))[2, "Std. Error"]
+AlphaFig$pval[6] <- coef(summary(piHg))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[7] <- shanPb$coefficients[2]
+AlphaFig$se[7] <- coef(summary(shanPb))[2, "Std. Error"]
+AlphaFig$pval[7] <- coef(summary(shanPb))[2, "Pr(>|t|)"]
+AlphaFig$beta[8] <- piPb$coefficients[2]
+AlphaFig$se[8] <- coef(summary(piPb))[2, "Std. Error"]
+AlphaFig$pval[8] <- coef(summary(piPb))[2, "Pr(>|t|)"]
+
+AlphaFig$beta[9] <- shanSe$coefficients[2]
+AlphaFig$se[9] <- coef(summary(shanSe))[2, "Std. Error"]
+AlphaFig$pval[9] <- coef(summary(shanSe))[2, "Pr(>|t|)"]
+AlphaFig$beta[10] <- piSe$coefficients[2]
+AlphaFig$se[10] <- coef(summary(piSe))[2, "Std. Error"]
+AlphaFig$pval[10] <- coef(summary(piSe))[2, "Pr(>|t|)"]
+
+AlphaFig$ci_low <- AlphaFig$beta-1.96*AlphaFig$se
+AlphaFig$ci_high <- AlphaFig$beta+1.96*AlphaFig$se
+AlphaFig$FDR_qval <- p.adjust(AlphaFig$pval, method = "fdr")
+
+Alphasummary <- AlphaFig %>% select(-se) %>% 
+  dplyr::rename(Metals=Exposure) %>% 
+  dplyr::rename(coef=beta) 
+
+#Alphasummary[,3:7] <- Alphasummary[,3:7] %>% round(3)
+  write.csv(Alphasummary,"Alphasummarymotherchildren_Male.csv")
+```
+
+#Step4: Beta diversity associations, all (Figure 3, Table S5)
+```{r}
+#Permutational Multivariate Analysis Of Variance Using Distance Matrices (adonis)
+adonisTABLE <- data.frame(Exposure = factor(),
+                      Method = character(),
+                      Adjust_covariates = numeric(),
+                      Nocovariates = numeric(),
+                      Adjust_covariates_r2 = numeric())
+adonisTABLE[1:20,] <- NA
+adonisTABLE$Exposure <- factor(adonisTABLE$Exposure, levels = c("Cd", "Mn","Hg","Pb","Se"))
+adonisTABLE$Exposure[1:4] <- "Cd"
+adonisTABLE$Exposure[5:8] <- "Mn"
+adonisTABLE$Exposure[9:12] <- "Hg"
+adonisTABLE$Exposure[13:16] <- "Pb"
+adonisTABLE$Exposure[17:20] <- "Se"
+
+
+adonisTABLE$Method <- rep(c("Weighted UniFrac", "Bray-Curtis", "Unweighted UniFrac","Jaccard"))
+adonisTABLE$Method <- factor(adonisTABLE$Method, levels = c("Weighted UniFrac","Bray-Curtis","Unweighted UniFrac", "Jaccard"))
+
+#BMI_delivery
+#Delivery_mode
+#DiagnoseIndex_pregnancy
+#DiagnoseIndex_preexisting
+
+##############Weighted Unifraq################
+yy_weighted <- distance(physeq, method="wunifrac")
+yy_weighted_Cd <- distance(physeq_Cd, method="wunifrac")
+yy_weighted_Pb <- distance(physeq_Pb, method="wunifrac")
+
+set.seed(4)
+weighted_Cd <- adonis(formula=yy_weighted_Cd~Cd_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, strata = NULL,data=Correlationscreening_Cd, permutations = 999, contr.unordered = "contr.sum")
+set.seed(4)
+weighted_Cd_nocov <- adonis(formula=yy_weighted_Cd~Cd_D_c, strata = NULL,data=Correlationscreening_Cd, permutations = 999, contr.unordered = "contr.sum")
+adonisTABLE[1,3] <- weighted_Cd$aov.tab["Cd_D_c","Pr(>F)"]
+adonisTABLE[1,4] <- weighted_Cd_nocov$aov.tab["Cd_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[1] <- weighted_Cd$aov.tab["Cd_D_c","R2"]
+
+set.seed(4)
+weighted_Mn <- adonis(formula=yy_weighted~Mn_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+weighted_Mn_nocov <- adonis(formula=yy_weighted~Mn_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[5,3] <- weighted_Mn$aov.tab["Mn_D_c","Pr(>F)"]
+adonisTABLE[5,4] <- weighted_Mn_nocov$aov.tab["Mn_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[5] <- weighted_Mn$aov.tab["Mn_D_c","R2"]
+
+set.seed(4)
+weighted_Hg <- adonis(formula=yy_weighted~Hg_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+weighted_Hg_nocov <- adonis(formula=yy_weighted~Hg_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[9,3] <- weighted_Hg$aov.tab["Hg_D_c","Pr(>F)"]
+adonisTABLE[9,4] <- weighted_Hg_nocov$aov.tab["Hg_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[9] <- weighted_Hg$aov.tab["Hg_D_c","R2"]
+
+set.seed(4)
+weighted_Pb <- adonis(formula=yy_weighted_Pb~Pb_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening_Pb, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+weighted_Pb_nocov <- adonis(formula=yy_weighted_Pb~Pb_D_c, data=Correlationscreening_Pb, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[13,3] <- weighted_Pb$aov.tab["Pb_D_c","Pr(>F)"]
+adonisTABLE[13,4] <- weighted_Pb_nocov$aov.tab["Pb_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[13] <- weighted_Pb$aov.tab["Pb_D_c","R2"]
+
+set.seed(4)
+weighted_Se <- adonis(formula=yy_weighted~Se_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+weighted_Se_nocov <- adonis(formula=yy_weighted~Se_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[17,3] <- weighted_Se$aov.tab["Se_D_c","Pr(>F)"]
+adonisTABLE[17,4] <- weighted_Se_nocov$aov.tab["Se_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[17] <- weighted_Se$aov.tab["Se_D_c","R2"]
+
+##############Unweighted Unifraq################
+yy_unweighted <- distance(physeq, method="unifrac")
+yy_unweighted_Cd <- distance(physeq_Cd, method="unifrac")
+yy_unweighted_Pb <- distance(physeq_Pb, method="unifrac")
+
+set.seed(4)
+unweighted_Cd <- adonis(formula=yy_unweighted_Cd~Cd_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, strata = NULL,data=Correlationscreening_Cd, permutations = 999, contr.unordered = "contr.sum")
+set.seed(4)
+unweighted_Cd_nocov <- adonis(formula=yy_unweighted_Cd~Cd_D_c, strata = NULL,data=Correlationscreening_Cd, permutations = 999, contr.unordered = "contr.sum")
+adonisTABLE[3,3] <- unweighted_Cd$aov.tab["Cd_D_c","Pr(>F)"]
+adonisTABLE[3,4] <- unweighted_Cd_nocov$aov.tab["Cd_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[3] <- unweighted_Cd$aov.tab["Cd_D_c","R2"]
+
+set.seed(4)
+unweighted_Mn <- adonis(formula=yy_unweighted~Mn_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+unweighted_Mn_nocov <- adonis(formula=yy_unweighted~Mn_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[7,3] <- unweighted_Mn$aov.tab["Mn_D_c","Pr(>F)"]
+adonisTABLE[7,4] <- unweighted_Mn_nocov$aov.tab["Mn_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[7] <- unweighted_Mn$aov.tab["Mn_D_c","R2"]
+
+set.seed(4)
+unweighted_Hg <- adonis(formula=yy_unweighted~Hg_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+unweighted_Hg_nocov <- adonis(formula=yy_unweighted~Hg_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[11,3] <- unweighted_Hg$aov.tab["Hg_D_c","Pr(>F)"]
+adonisTABLE[11,4] <- unweighted_Hg_nocov$aov.tab["Hg_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[11] <- unweighted_Hg$aov.tab["Hg_D_c","R2"]
+
+set.seed(4)
+unweighted_Pb <- adonis(formula=yy_unweighted_Pb~Pb_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening_Pb, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+unweighted_Pb_nocov <- adonis(formula=yy_unweighted_Pb~Pb_D_c, data=Correlationscreening_Pb, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[15,3] <- unweighted_Pb$aov.tab["Pb_D_c","Pr(>F)"]
+adonisTABLE[15,4] <- unweighted_Pb_nocov$aov.tab["Pb_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[15] <- unweighted_Pb$aov.tab["Pb_D_c","R2"]
+
+set.seed(4)
+unweighted_Se <- adonis(formula=yy_unweighted~Se_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+unweighted_Se_nocov <- adonis(formula=yy_unweighted~Se_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[19,3] <- unweighted_Se$aov.tab["Se_D_c","Pr(>F)"]
+adonisTABLE[19,4] <- unweighted_Se_nocov$aov.tab["Se_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[19] <- unweighted_Se$aov.tab["Se_D_c","R2"]
+
+
+###########Bray-Curtis Distance########
+YY_bray <- distance(physeq, "bray")
+YY_bray_Cd <- distance(physeq_Cd, "bray")
+YY_bray_Pb <- distance(physeq_Pb, "bray")
+
+set.seed(4)
+bray_Cd <- adonis(formula=YY_bray_Cd~Cd_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, strata = NULL,data=Correlationscreening_Cd, permutations = 999, contr.unordered = "contr.sum")
+set.seed(4)
+bray_Cd_nocov <- adonis(formula=YY_bray_Cd~Cd_D_c, strata = NULL,data=Correlationscreening_Cd, permutations = 999, contr.unordered = "contr.sum")
+adonisTABLE[2,3] <- bray_Cd$aov.tab["Cd_D_c","Pr(>F)"]
+adonisTABLE[2,4] <- bray_Cd_nocov$aov.tab["Cd_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[2] <- bray_Cd$aov.tab["Cd_D_c","R2"]
+
+set.seed(4)
+bray_Mn <- adonis(formula=YY_bray~Mn_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+bray_Mn_nocov <- adonis(formula=YY_bray~Mn_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[6,3] <- bray_Mn$aov.tab["Mn_D_c","Pr(>F)"]
+adonisTABLE[6,4] <- bray_Mn_nocov$aov.tab["Mn_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[6] <- bray_Mn$aov.tab["Mn_D_c","R2"]
+
+set.seed(4)
+bray_Hg <- adonis(formula=YY_bray~Hg_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+bray_Hg_nocov <- adonis(formula=YY_bray~Hg_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[10,3] <- bray_Hg$aov.tab["Hg_D_c","Pr(>F)"]
+adonisTABLE[10,4] <- bray_Hg_nocov$aov.tab["Hg_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[10] <- bray_Hg$aov.tab["Hg_D_c","R2"]
+
+set.seed(4)
+bray_Pb <- adonis(formula=YY_bray_Pb~Pb_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening_Pb, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+bray_Pb_nocov <- adonis(formula=YY_bray_Pb~Pb_D_c, data=Correlationscreening_Pb, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[14,3] <- bray_Pb$aov.tab["Pb_D_c","Pr(>F)"]
+adonisTABLE[14,4] <- bray_Pb_nocov$aov.tab["Pb_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[14] <- bray_Pb$aov.tab["Pb_D_c","R2"]
+
+set.seed(4)
+bray_Se <- adonis(formula=YY_bray~Se_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+bray_Se_nocov <- adonis(formula=YY_bray~Se_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[18,3] <- bray_Se$aov.tab["Se_D_c","Pr(>F)"]
+adonisTABLE[18,4] <- bray_Se_nocov$aov.tab["Se_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[18] <- bray_Se$aov.tab["Se_D_c","R2"]
+
+#########jaccard distance########
+yy_jaccard <- distance(physeq,"jaccard",binary = TRUE)
+yy_jaccard_Cd <- distance(physeq_Cd,"jaccard",binary = TRUE)
+yy_jaccard_Pb <- distance(physeq_Pb,"jaccard",binary = TRUE)
+
+set.seed(4)
+jaccard_Cd <- adonis(formula=yy_jaccard_Cd~Cd_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, strata = NULL,data=Correlationscreening_Cd, permutations = 999, contr.unordered = "contr.sum")
+set.seed(4)
+jaccard_Cd_nocov <- adonis(formula=yy_jaccard_Cd~Cd_D_c, strata = NULL, data=Correlationscreening_Cd, permutations = 999, contr.unordered = "contr.sum")
+adonisTABLE[4,3] <- jaccard_Cd$aov.tab["Cd_D_c","Pr(>F)"]
+adonisTABLE[4,4] <- jaccard_Cd_nocov$aov.tab["Cd_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[4] <- jaccard_Cd$aov.tab["Cd_D_c","R2"]
+
+set.seed(4)
+jaccard_Mn <- adonis(formula=yy_jaccard~Mn_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+jaccard_Mn_nocov <- adonis(formula=yy_jaccard~Mn_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[8,3] <- jaccard_Mn$aov.tab["Mn_D_c","Pr(>F)"]
+adonisTABLE[8,4] <- jaccard_Mn_nocov$aov.tab["Mn_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[8] <- jaccard_Mn$aov.tab["Mn_D_c","R2"]
+
+set.seed(4)
+jaccard_Hg <- adonis(formula=yy_jaccard~Hg_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+jaccard_Hg_nocov <- adonis(formula=yy_jaccard~Hg_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[12,3] <- jaccard_Hg$aov.tab["Hg_D_c","Pr(>F)"]
+adonisTABLE[12,4] <- jaccard_Hg_nocov$aov.tab["Hg_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[12] <- jaccard_Hg$aov.tab["Hg_D_c","R2"]
+
+set.seed(4)
+jaccard_Pb <- adonis(formula=yy_jaccard_Pb~Pb_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening_Pb, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+jaccard_Pb_nocov <- adonis(formula=yy_jaccard_Pb~Pb_D_c, data=Correlationscreening_Pb, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[16,3] <- jaccard_Pb$aov.tab["Pb_D_c","Pr(>F)"]
+adonisTABLE[16,4] <- jaccard_Pb$aov.tab["Pb_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[16] <- jaccard_Pb$aov.tab["Pb_D_c","R2"]
+
+set.seed(4)
+jaccard_Se <- adonis(formula=yy_jaccard~Se_D_c+Delivery_mode+BMI_delivery+DiagnoseIndex_prgnancy+DiagnoseIndex_preexisting+Sex+Family_Income, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+set.seed(4)
+jaccard_Se_nocov <- adonis(formula=yy_jaccard~Se_D_c, data=Correlationscreening, permutations = 999,strata = NULL, contr.unordered = "contr.sum")
+adonisTABLE[20,3] <- jaccard_Se$aov.tab["Se_D_c","Pr(>F)"]
+adonisTABLE[20,4] <- jaccard_Se_nocov$aov.tab["Se_D_c","Pr(>F)"]
+adonisTABLE$Adjust_covariates_r2[20] <- jaccard_Se$aov.tab["Se_D_c","R2"]
+
+##########
+b <- c(0, 0.25, 0.5, 0.75, 1)
+
+adonisTABLE$pless1 <- as.numeric(ifelse(adonisTABLE$Nocovariates < 0.2, adonisTABLE$Nocovariates,NA))
+BetaHeatMap_nocovariates <- ggplot(adonisTABLE, 
+                      aes (Exposure, Method, fill = Nocovariates)) +
+  theme_bw() +theme(panel.grid.major =element_blank(), panel.grid.minor =element_blank()) +
+  geom_tile() +
+  scale_x_discrete(name = "", labels = wrap_format(10), 
+                   limits = c("Cd", "Mn","Hg","Pb","Se")) +
+  scale_y_discrete(name = "", labels = wrap_format(10),
+                   limits = rev(c("Weighted UniFrac", "Bray-Curtis", "Unweighted UniFrac","Jaccard"))) +
+  geom_text(data = adonisTABLE,
+            aes(Exposure, Method, label = round(pless1, digits =3)), 
+            show.legend = FALSE, color = "white", size = 6) +
+  scale_fill_gradientn(limits = c(0,1.01), colors = rev(brewer.pal(6, "YlOrRd")), 
+                       breaks =b, labels = format(b), 
+                       guide = guide_colorbar(barheight = unit(8, "cm"),
+                                              title = "p-value",title.vjust =8)) +
+  theme(axis.text = element_text(size = 18),
+        axis.title = element_text(size = 18),
+        legend.title = element_text(size =18),
+        legend.text = element_text(size =18))+ggtitle("Beta Diversity_No Covariates")
+
+print(BetaHeatMap_nocovariates)
+
+##############
+adonisTABLE$pless2 <- as.numeric(ifelse(adonisTABLE$Adjust_covariates < 0.2, adonisTABLE$Adjust_covariates,NA))
+BetaHeatMap_adjustcovariates <- ggplot(adonisTABLE, 
+                      aes (Exposure, Method, fill = Adjust_covariates)) +
+  theme_bw() +theme(panel.grid.major =element_blank(), panel.grid.minor =element_blank()) +
+  geom_tile() +
+  scale_x_discrete(name = "", labels = wrap_format(10), 
+                   limits = c("Cd", "Mn","Hg","Pb","Se")) +
+  scale_y_discrete(name = "", labels = wrap_format(10),
+                   limits = rev(c("Weighted UniFrac", "Bray-Curtis", "Unweighted UniFrac","Jaccard"))) +
+  geom_text(data = adonisTABLE,
+            aes(Exposure, Method, label = round(pless2, digits =3)), 
+            show.legend = FALSE, color = "white", size = 6) +
+  scale_fill_gradientn(limits = c(0,1.01), colors = rev(brewer.pal(6, "YlOrRd")), 
+                       breaks =b, labels = format(b), 
+                       guide = guide_colorbar(barheight = unit(8, "cm"),
+                                              title = "p-value",title.vjust =8)) +
+  theme(axis.text = element_text(size = 18),
+        axis.title = element_text(size = 18),
+        legend.title = element_text(size =18),
+        legend.text = element_text(size =18))
+BetaHeatMap_adjustcovariates
+
+adonisTABLE$FDR_qval <- p.adjust(adonisTABLE$Adjust_covariates, method = "fdr")
+adonisTABLE$noadjust_FDR_qval <- p.adjust(adonisTABLE$Nocovariates, method = "fdr")
+BetasigTable <-  adonisTABLE %>% select(Exposure,Method,Adjust_covariates,FDR_qval,Nocovariates,noadjust_FDR_qval,Adjust_covariates_r2) %>% 
+  dplyr::rename(Metals=Exposure) %>% 
+  dplyr::rename(pval=Adjust_covariates)
+
+BetasigTable[,3:4] <- BetasigTable[,3:4] %>% round(3)
+write.csv(BetasigTable,"betamcassociations.csv")
+```
+
+
+#Step 5: Taxa (phylum & family) associations
+#Taxa (phylum) associations (Table 2, Excel Table S8)
+```{r}
+phyloGlom = tax_glom(physeq, "Phylum")
+glomTax = tax_table(phyloGlom)[,"Phylum"]
+glomOTU = otu_table(phyloGlom)
+glomTable = merge(glomOTU,glomTax,by=0,all=TRUE) 
+rownames(glomTable) = glomTable[,"Phylum"]
+glomTable$Row.names = NULL
+glomTable$Phylum = NULL
+
+#remove phylums in less than 10% of samples7
+glomTable <- glomTable[rowSums(glomTable == 0) <= 61, ]
+
+glomTable2 = glomTable / rep(colSums(glomTable), each = nrow(glomTable))
+glomTable3 <- glomTable2 %>% t()
+Sample <- rownames(glomTable3)
+glomTable3 <- cbind(Sample,glomTable3) %>% as.data.frame()
+
+glomTable3 <- glomTable3[,-1]
+
+input_data_phy <- glomTable3 %>% as.data.frame()
+input_data_phy[] <- lapply(input_data_phy, function(x) as.numeric(as.character(x)))
+
+input_metadata_phy <- Correlationscreening %>% select(-diversity_shannon,-pielou) %>% as.data.frame()
+
+input_metadata_phy_Cd <- input_metadata_phy[!(row.names(input_metadata_phy) %in% "PARTICIPANT_ID"), ]
+input_data_phy_Cd <- input_data_phy[!(row.names(input_data_phy) %in% "PARTICIPANT_ID"), ]
+
+input_metadata_phy_Cd <- input_metadata_phy_Cd[!(row.names(input_metadata_phy_Cd) %in% "PARTICIPANT_ID"), ]
+input_data_phy_Cd <- input_data_phy_Cd[!(row.names(input_data_phy_Cd) %in% "PARTICIPANT_ID"), ]
+
+input_metadata_phy_Pb <- input_metadata_phy[!(row.names(input_metadata_phy) %in% "PARTICIPANT_ID"), ]
+input_data_phy_Pb <- input_data_phy[!(row.names(input_data_phy) %in% "PARTICIPANT_ID"), ]
+
+#Cd phylum
+fit_data1 = Maaslin2(
+    input_data = input_data_phy_Cd,
+    input_metadata = input_metadata_phy_Cd,
+    output = "masslin_phylum_output_Cd",
+    fixed_effects = c("Cd_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Cd <- read.table(file="./masslin_phylum_output_Cd/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Cd <- FDRq_Cd[which(FDRq_Cd$metadata=='Cd_D_c', ),]
+correctedq_Cd <- p.adjust(FDRq_Cd$pval, method = "fdr")
+FDRq_Cd <- cbind(FDRq_Cd,correctedq_Cd)
+
+#Mn phylum
+fit_data2 = Maaslin2(
+    input_data = input_data_phy,
+    input_metadata = input_metadata_phy,
+    output = "masslin_phylum_output_Mn",
+    fixed_effects = c("Mn_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Mn <- read.table(file="./masslin_phylum_output_Mn/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Mn <- FDRq_Mn[which(FDRq_Mn$metadata=='Mn_D_c', ),]
+correctedq_Mn <- p.adjust(FDRq_Mn$pval, method = "fdr")
+FDRq_Mn <- cbind(FDRq_Mn,correctedq_Mn)
+
+#Hg phylum
+fit_data3 = Maaslin2(
+    input_data = input_data_phy,
+    input_metadata = input_metadata_phy,
+    output = "masslin_phylum_output_Hg",
+    fixed_effects = c("Hg_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Hg <- read.table(file="./masslin_phylum_output_Hg/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Hg <- FDRq_Hg[which(FDRq_Hg$metadata=='Hg_D_c', ),]
+correctedq_Hg <- p.adjust(FDRq_Hg$pval, method = "fdr")
+FDRq_Hg <- cbind(FDRq_Hg,correctedq_Hg)
+
+#Pb phylum
+fit_data4 = Maaslin2(
+    input_data = input_data_phy_Pb,
+    input_metadata = input_metadata_phy_Pb,
+    output = "masslin_phylum_output_Pb",
+    fixed_effects = c("Pb_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Pb <- read.table(file="./masslin_phylum_output_Pb/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Pb <- FDRq_Pb[which(FDRq_Pb$metadata=='Pb_D_c', ),]
+correctedq_Pb <- p.adjust(FDRq_Pb$pval, method = "fdr")
+FDRq_Pb <- cbind(FDRq_Pb,correctedq_Pb)
+
+#Se phylum
+fit_data5 = Maaslin2(
+    input_data = input_data_phy,
+    input_metadata = input_metadata_phy,
+    output = "masslin_phylum_output_Se",
+    fixed_effects = c("Se_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Se <- read.table(file="./masslin_phylum_output_Se/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Se <- FDRq_Se[which(FDRq_Se$metadata=='Se_D_c', ),]
+correctedq_Se <- p.adjust(FDRq_Se$pval, method = "fdr")
+FDRq_Se <- cbind(FDRq_Se,correctedq_Se)
+
+FDRq_Cd <- FDRq_Cd %>% dplyr::rename(FDR_qval=correctedq_Cd)
+FDRq_Mn <- FDRq_Mn %>% dplyr::rename(FDR_qval=correctedq_Mn)
+FDRq_Hg <- FDRq_Hg %>% dplyr::rename(FDR_qval=correctedq_Hg)
+FDRq_Pb <- FDRq_Pb %>% dplyr::rename(FDR_qval=correctedq_Pb)
+FDRq_Se <- FDRq_Se %>% dplyr::rename(FDR_qval=correctedq_Se)
+
+Allassociationsphyla <- rbind(FDRq_Cd,FDRq_Mn,FDRq_Hg,FDRq_Pb,FDRq_Se)
+Allassociationsphyla <- Allassociationsphyla %>% select(metadata, feature, coef,stderr,pval,FDR_qval)
+
+```
+
+#Taxa (family) associations (Table 2, Excel Table S8)
+```{r}
+family.sum = tapply(taxa_sums(physeq), tax_table(physeq)[, "Family"], sum, na.rm=TRUE)
+
+phyloGlom = tax_glom(physeq, "Family")
+glomTax = tax_table(phyloGlom)[,"Family"]
+glomOTU = otu_table(phyloGlom)
+glomTable = merge(glomOTU,glomTax,by=0,all=TRUE) 
+glomTable <- glomTable[rowSums(glomTable == 0) <= 61, ]
+glomTable <- glomTable[(!glomTable$Family == "__"), ]
+glomTable <- glomTable[(!glomTable$Family == "uncultured"), ]
+
+rownames(glomTable) = glomTable[,"Family"]
+glomTable$Row.names = NULL
+glomTable$Family = NULL
+
+glomTable2 = glomTable / rep(colSums(glomTable), each = nrow(glomTable))
+glomTable3 <- glomTable2 %>% t()
+
+Sample <- rownames(glomTable3)
+glomTable3 <- cbind(Sample,glomTable3) %>% as.data.frame()
+
+glomTable3 <- glomTable3[,-1]
+
+input_data <- glomTable3 %>% as.data.frame()
+input_data[] <- lapply(input_data, function(x) as.numeric(as.character(x)))
+
+input_metadata <- Correlationscreening %>% select(-diversity_shannon,-pielou) %>% as.data.frame()
+
+input_metadata_Cd <- input_metadata[!(row.names(input_metadata) %in% "P_1022"), ]
+input_data_Cd <- input_data[!(row.names(input_data) %in% "P_1022"), ]
+
+input_metadata_Cd <- input_metadata_Cd[!(row.names(input_metadata_Cd) %in% "P_2212"), ]
+input_data_Cd <- input_data_Cd[!(row.names(input_data_Cd) %in% "P_2212"), ]
+
+input_metadata_Pb <- input_metadata[!(row.names(input_metadata) %in% "P_2073"), ]
+input_data_Pb <- input_data[!(row.names(input_data) %in% "P_2073"), ]
+
+fit_data6 = Maaslin2(
+    input_data = input_data_Cd,
+    input_metadata = input_metadata_Cd,
+    output = "masslin_family_output_Cd",
+    fixed_effects = c("Cd_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Cd2 <- read.table(file="./masslin_family_output_Cd/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Cd2 <- FDRq_Cd2[which(FDRq_Cd2$metadata=='Cd_D_c', ),]
+correctedq_Cd2 <- p.adjust(FDRq_Cd2$pval, method = "fdr")
+FDRq_Cd2 <- cbind(FDRq_Cd2,correctedq_Cd2)
+
+#Mn phylum
+fit_data7 = Maaslin2(
+    input_data = input_data,
+    input_metadata = input_metadata,
+    output = "masslin_family_output_Mn",
+    fixed_effects = c("Mn_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Mn2 <- read.table(file="./masslin_family_output_Mn/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Mn2 <- FDRq_Mn2[which(FDRq_Mn2$metadata=='Mn_D_c', ),]
+correctedq_Mn2 <- p.adjust(FDRq_Mn2$pval, method = "fdr")
+FDRq_Mn2 <- cbind(FDRq_Mn2,correctedq_Mn2)
+
+#Hg phylum
+fit_data8 = Maaslin2(
+    input_data = input_data,
+    input_metadata = input_metadata,
+    output = "masslin_family_output_Hg",
+    fixed_effects = c("Hg_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Hg2 <- read.table(file="./masslin_family_output_Hg/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Hg2 <- FDRq_Hg2[which(FDRq_Hg2$metadata=='Hg_D_c', ),]
+correctedq_Hg2 <- p.adjust(FDRq_Hg2$pval, method = "fdr")
+FDRq_Hg2 <- cbind(FDRq_Hg2,correctedq_Hg2)
+
+#Pb phylum
+fit_data9 = Maaslin2(
+    input_data = input_data_Pb,
+    input_metadata = input_metadata_Pb,
+    output = "masslin_family_output_Pb",
+    fixed_effects = c("Pb_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Pb2 <- read.table(file="./masslin_family_output_Pb/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Pb2 <- FDRq_Pb2[which(FDRq_Pb2$metadata=='Pb_D_c', ),]
+correctedq_Pb2 <- p.adjust(FDRq_Pb2$pval, method = "fdr")
+FDRq_Pb2 <- cbind(FDRq_Pb2,correctedq_Pb2)
+
+#Se phylum
+fit_data10 = Maaslin2(
+    input_data = input_data,
+    input_metadata = input_metadata,
+    output = "masslin_family_output_Se",
+    fixed_effects = c("Se_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Se2 <- read.table(file="./masslin_family_output_Se/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Se2 <- FDRq_Se2[which(FDRq_Se2$metadata=='Se_D_c', ),]
+correctedq_Se2 <- p.adjust(FDRq_Se2$pval, method = "fdr")
+FDRq_Se2 <- cbind(FDRq_Se2,correctedq_Se2)
+
+FDRq_Cd2 <- FDRq_Cd2 %>% dplyr::rename(FDR_qval=correctedq_Cd2)
+FDRq_Mn2 <- FDRq_Mn2 %>% dplyr::rename(FDR_qval=correctedq_Mn2)
+FDRq_Hg2 <- FDRq_Hg2 %>% dplyr::rename(FDR_qval=correctedq_Hg2)
+FDRq_Pb2 <- FDRq_Pb2 %>% dplyr::rename(FDR_qval=correctedq_Pb2)
+FDRq_Se2 <- FDRq_Se2 %>% dplyr::rename(FDR_qval=correctedq_Se2)
+
+Allassociationsfamilies <- rbind(FDRq_Cd2,FDRq_Mn2,FDRq_Hg2,FDRq_Pb2,FDRq_Se2)
+Allassociationsfamilies <- Allassociationsfamilies %>% select(metadata, feature, coef,stderr,pval,FDR_qval)
+
+ALLmcpairtaxaassociations <- rbind(Allassociationsphyla,Allassociationsfamilies)
+ALLmcpairtaxaassociations[,3:6] <- ALLmcpairtaxaassociations[,3:6] %>% round(3)
+
+write.csv(ALLmcpairtaxaassociations,"ALLmcpairtaxaassociations.csv")
+```
+
+# Taxa association plot
+```{r}
+#Mn vs Actinomycetaceae
+Stats_Mn_Verrucomicrobiota <- FDRq_Mn2[1,]
+Actinomycetaceae <- input_data %>% select("Actinomycetaceae")
+Mn <- input_metadata_phy %>% select("Mn_D_c")
+
+#Se phylum
+#Se vs Actinobacteriota
+Stats_Se_phylum <- FDRq_Se[1,]
+Actinobacteriota <- input_data_phy%>% select("Actinobacteriota") 
+Se <- input_metadata_phy%>% select("Se_D_c")
+
+Stats_Pb_phylum <- FDRq_Pb[1,]
+Fusobacteriota <- input_data_phy%>% select("Fusobacteriota") 
+Pb <- input_metadata_phy%>% select("Pb_D_c")
+
+taxascreendf <- cbind(Mn,Se,Pb,Actinomycetaceae,Actinobacteriota,Fusobacteriota) %>% as.data.frame() 
+taxascreenstats <- rbind(Stats_Mn_Verrucomicrobiota,Stats_Se_phylum,Stats_Pb_phylum)
+
+Taxascreenplot1 <- ggplot(taxascreendf,aes(x=Mn_D_c, y=log(Actinomycetaceae))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=170, y=-6, label="coef=0.263, q value=0.086",color="red") +
+  ggtitle("Association of Actinomycetaceae ~ Mn")+
+  labs(x="Perinatal Blood Manganese (nmol/L)", y="Actinomycetaceae Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+  
+Taxascreenplot2<- ggplot(taxascreendf,aes(x=Se_D_c, y=log(Actinobacteriota))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  ggtitle("Association of Actinobacteriota ~ Se")+
+  annotate(geom="text", x=1.8, y=-2, label="coef=0.176, q value=0.095",color="red")+
+  labs(x="Perinatal Blood Selenium (umol/L)", y="Actinobacteriota Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+taxascreendf_Pb <- taxascreendf[!(row.names(taxascreendf) %in% "P_2073"), ]
+
+Taxascreenplot3<- ggplot(taxascreendf_Pb,aes(x=Pb_D_c, y=log(Fusobacteriota))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  ggtitle("Association of Fusobacteriota ~ Pb")+
+  annotate(geom="text", x=0.025, y=-4, label="coef=0.189, q value=0.028",color="red")+
+  labs(x="Perinatal Blood Lead (umol/L)", y="Fusobacteriota Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+grid.arrange(Taxascreenplot1,Taxascreenplot2,nrow=1,top="Taxa association mother-child pair")
+
+clean_mcpair_stat <- taxascreenstats%>% select(metadata,feature,value,coef,pval,FDR_qval)
+clean_mcpair_stat[,c(4:6)] <- clean_mcpair_stat[,c(4:6)] %>% round(3)
+write.csv(clean_mcpair_stat,file="taxa_mother_childrenpair.csv")
+```
+
+#Step6: Metaphlan direct species association (shotgun metagenome data)
+#Metaphlan table cleanup
+```{r}
+SPECIES <- lapply(list.files(pattern = "*merged_abundance_table.tsv"), function(i){read_tsv(i)}) 
+
+IDS <- lapply(SPECIES,function(x) substring(names(x),1,regexpr("_dehost_metaphlan_bugs_list",names(x))-1))
+IDS <- unlist(IDS)[-1]
+
+SPECIES <- lapply(SPECIES, function(x) 
+  separate(data = x, col = "#clade_name", into = c("Domain","Phylum","Class","Order","Family","Genus","Species"), sep = "\\|"))
+SPECIES <- lapply(SPECIES, subset)
+SPECIES <- SPECIES %>% reduce(full_join, by = "Domain")
+colnames(SPECIES)[8:ncol(SPECIES)] <- IDS
+SPECIES <- SPECIES[,-8] %>% as.data.frame()
+SPECIES <- SPECIES %>% dplyr::rename('2386'='2336')
+
+SPECIES_Species <- SPECIES[complete.cases(SPECIES[ ,7]),]
+SPECIES_Species_relab <- SPECIES_Species
+dim(SPECIES_Species[duplicated(SPECIES_Species$Species),])[1]
+
+```
+
+#Metaphlan species association (Excel Table S10)
+```{r}
+#no outlier removed input dataframe
+SPECIES_Species <- SPECIES_Species[,-c(1:6)]
+rownames(SPECIES_Species) <- NULL
+SPECIESLIST <- SPECIES_Species$Species
+rownames(SPECIES_Species) <- SPECIESLIST
+SPECIES_Species <- SPECIES_Species[,-1]
+SPECIES_Species_2 <- t(SPECIES_Species)
+Samplelist_85 <- rownames(SPECIES_Species_2) %>% as.data.frame()
+colnames(Samplelist_85) <- 'SampleID'
+SPECIES_Species_2 <- cbind(Samplelist_85,SPECIES_Species_2)
+rownames(SPECIES_Species_2) <- NULL
+
+
+SPECIES_Species_2$SampleID <- paste("P",SPECIES_Species_2$SampleID,sep="_")
+Spciesscreeningdataframe <- cbind(rownames(Correlationscreening),Correlationscreening)
+Spciesscreeningdataframe <- Spciesscreeningdataframe %>% dplyr::rename(SampleID='rownames(Correlationscreening)')
+
+ALLmatch_species <- match_df(SPECIES_Species_2,Spciesscreeningdataframe, on ="SampleID")
+Spciesscreeningdataframe <- match_df(Spciesscreeningdataframe,SPECIES_Species_2, on ="SampleID")
+
+##All for Mn, Hg, Se
+input_metadata_species <- Spciesscreeningdataframe %>% as.data.frame()
+input_data_species <- ALLmatch_species %>% as.data.frame()
+rownames(input_data_species) <- rownames(input_metadata_species)
+input_data_species <- input_data_species[,-1]
+
+#Two removed for Cd
+input_metadata_species_Cd <- input_metadata_species[!(row.names(input_metadata_species) %in% "PARTICIPANT_ID"), ]
+input_metadata_species_Cd <- input_metadata_species_Cd[!(row.names(input_metadata_species_Cd) %in% "PARTICIPANT_ID"), ]
+
+input_data_species_Cd <- input_data_species[!(row.names(input_data_species) %in% "PARTICIPANT_ID"), ]
+input_data_species_Cd <- input_data_species[!(row.names(input_data_species_Cd) %in% "PARTICIPANT_ID"), ]
+
+#one removed for Pb
+input_metadata_species_Pb <- input_metadata_species[!(row.names(input_metadata_species) %in% "PARTICIPANT_ID"), ]
+input_data_species_Pb <- input_data_species[!(row.names(input_data_species) %in% "PARTICIPANT_ID"), ]
+
+#Cd species,two removed
+fit_data11 = Maaslin2(
+    input_data = input_data_species_Cd,
+    input_metadata = input_metadata_species_Cd,
+    output = "masslin_species_output_Cd",
+    fixed_effects = c("Cd_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Cd <- read.table(file="./masslin_species_output_Cd/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Cd <- FDRq_Cd[which(FDRq_Cd$metadata=='Cd_D_c', ),]
+correctedq_Cd <- p.adjust(FDRq_Cd$pval, method = "fdr")
+FDRq_Cd <- cbind(FDRq_Cd,correctedq_Cd)
+
+#Mn species,all
+fit_data12 = Maaslin2(
+    input_data = input_data_species,
+    input_metadata = input_metadata_species,
+    output = "masslin_species_output_Mn",
+    fixed_effects = c("Mn_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Mn <- read.table(file="./masslin_species_output_Mn/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Mn <- FDRq_Mn[which(FDRq_Mn$metadata=='Mn_D_c', ),]
+correctedq_Mn <- p.adjust(FDRq_Mn$pval, method = "fdr")
+FDRq_Mn <- cbind(FDRq_Mn,correctedq_Mn)
+
+#Hg species, all
+fit_data3 = Maaslin2(
+    input_data = input_data_species,
+    input_metadata = input_metadata_species_Pb,
+    output = "masslin_species_output_Hg",
+    fixed_effects = c("Hg_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Hg <- read.table(file="./masslin_species_output_Hg/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Hg <- FDRq_Hg[which(FDRq_Hg$metadata=='Hg_D_c', ),]
+correctedq_Hg <- p.adjust(FDRq_Hg$pval, method = "fdr")
+FDRq_Hg <- cbind(FDRq_Hg,correctedq_Hg)
+
+#Pb species, one removed
+fit_data4 = Maaslin2(
+    input_data = input_data_species_Pb,
+    input_metadata = input_metadata_species_Pb,
+    output = "masslin_species_output_Pb",
+    fixed_effects = c("Pb_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Pb <- read.table(file="./masslin_species_output_Pb/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Pb <- FDRq_Pb[which(FDRq_Pb$metadata=='Pb_D_c', ),]
+correctedq_Pb <- p.adjust(FDRq_Pb$pval, method = "fdr")
+FDRq_Pb <- cbind(FDRq_Pb,correctedq_Pb)
+
+#Se phylum
+fit_data5 = Maaslin2(
+    input_data = input_data_species,
+    input_metadata = input_metadata_species,
+    output = "masslin_species_output_Se",
+    fixed_effects = c("Se_D_c","Delivery_mode","BMI_delivery","Gestational_age","DiagnoseIndex_prgnancy","DiagnoseIndex_preexisting","Sex","Family_Income"))
+FDRq_Se <- read.table(file="./masslin_species_output_Se/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Se <- FDRq_Se[which(FDRq_Se$metadata=='Se_D_c', ),]
+correctedq_Se <- p.adjust(FDRq_Se$pval, method = "fdr")
+FDRq_Se <- cbind(FDRq_Se,correctedq_Se)
+
+FDRq_Cd <- FDRq_Cd %>% dplyr::rename(FDR_qval=correctedq_Cd)
+FDRq_Mn <- FDRq_Mn %>% dplyr::rename(FDR_qval=correctedq_Mn)
+FDRq_Hg <- FDRq_Hg %>% dplyr::rename(FDR_qval=correctedq_Hg)
+FDRq_Pb <- FDRq_Pb %>% dplyr::rename(FDR_qval=correctedq_Pb)
+FDRq_Se <- FDRq_Se %>% dplyr::rename(FDR_qval=correctedq_Se)
+
+Allassociations_species <- rbind(FDRq_Cd,FDRq_Mn,FDRq_Hg,FDRq_Pb,FDRq_Se)
+Allassociations_species <- Allassociations_species %>% select(metadata, feature, coef,stderr,pval,FDR_qval)
+
+write.csv(Allassociations_species,"Allassociations_metaphlan_perinatal.csv")
+```
+
