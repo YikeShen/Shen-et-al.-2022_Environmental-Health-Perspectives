@@ -1,0 +1,514 @@
+---
+title: "EHP Shen gene family-inferred species analysis"
+author: "Yike Shen"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+## Readme:
+#You can not run this script without metadata, this aims to provide the workflow of our paper and offer pseudo code example for analysis. 
+# Request for data must go through approval with GESTE cohort, after approval I can share the original scripts with participants name and input processed sequence data. 
+#All participant names are de-identified as "PARTICIPANT_ID"; All name of the inputsheets are redacted as "INPUTDATA.csv"
+## End
+
+#Housekeeping
+```{r}
+rm(list=ls())
+library("Maaslin2")
+library(readxl)
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(useful)
+library(stringr)
+library(tidyr)
+library(plyr)
+```
+
+setwd("/Users/yikeshen/Desktop/metagenome")
+
+#cc denotes child exposure-child microbiome
+#mc denotes perinatal exposure-child microbiome
+
+#Child exposure-child microbiome
+#load files
+```{r}
+rm(list=ls())
+#Mn and Se not significant
+Cd <- read.table(file = 'sig_cc_out/Cd_sig_species_rmunclassified.tsv', sep = '', header = FALSE)
+Hg <- read.table(file = 'sig_cc_out/Hg_sig_species_cc.tsv', sep = '\t', header = FALSE)
+Pb <- read.table(file = 'sig_cc_out/Pb_sig_species_cc.tsv', sep = '\t', header = FALSE)
+metadata <- read.table(file = 'sig_cc_out/input_metadata_phy_all.tsv', sep = '\t', header = TRUE)
+Cd_stat <- read.table(file = 'sig_cc_out/FDRq_Cdsig2.tsv', sep = '', header = TRUE)
+Hg_stat <- read.table(file='sig_cc_out/FDRq_Hgsig.tsv', sep='',header = TRUE)
+Pb_stat <- read.table(file='sig_cc_out/FDRq_Pbsig.tsv', sep='',header = TRUE)
+
+```
+
+#Hg_cc
+```{r}
+Hg <- Hg[!grepl("unclassified", Hg$V1),]
+Hgprocessing <- Hg %>% separate(col = "V1", into = c("protein", "gene"), sep = "\\|")
+Hgprocessing <- Hgprocessing[complete.cases(Hgprocessing[ , 1:2]),]
+Hgprocessing$gene<- make.unique(as.character(Hgprocessing$gene), sep = "_")
+
+rownames(Hgprocessing) <- Hgprocessing$gene
+Hgprocessing_new <- Hgprocessing[,-c(1:2)]
+Hgprocessing_new <- t(Hgprocessing_new)
+
+FUNC <- lapply(list.files(pattern = "*humann_pathway_relab.tsv"), function(i){read_tsv(i)}) 
+IDS <- lapply(FUNC,function(x) substring(names(x),1,regexpr("_dehost_Abundance",names(x))-1))
+IDS <- unlist(IDS)[-1]
+rownames(Hgprocessing_new) <- IDS
+Hgprocessing_new <- Hgprocessing_new %>% as.data.frame()
+Hgprocessing_new$IDS <- IDS
+
+metadata <- metadata %>% dplyr::rename(IDS=ID1) 
+Hg_stat <- Hg_stat%>% dplyr::rename(protein=feature)
+metadata$IDS <- as.character(metadata$IDS)
+Hg_alltable <- join(Hg_stat,Hgprocessing, match ="all")
+Hg_alltable <- Hg_alltable[complete.cases(Hg_alltable[ ,10:11]),]
+
+association_species <- Hg_alltable[,11:96]
+association_species_media <- association_species[,-1]
+colnames(association_species_media) <- IDS
+genus <- association_species[,1]
+association_species <- cbind(genus,association_species_media)
+ROWS <- colnames(association_species)
+association_species <- rbind(ROWS,association_species)
+#association_species <- lapply(association_species, function(x) as.numeric(as.character(x)))
+association_species <- t(association_species)
+
+rownames(association_species) <- NULL
+colnames(association_species) <- NULL
+colnames(association_species) <- association_species[1,]
+association_species <- association_species[-1,]
+metadata <- metadata %>% dplyr::rename(genus=ID)
+association_species <- association_species %>% as.data.frame()
+association_species[,2:7] <- lapply(association_species[,2:7], function(x) as.numeric(as.character(x)))
+
+qualitycheck <- join(metadata,association_species,match ="all")
+matchspecies <- qualitycheck[,12:17]
+matchspecies <- cbind(qualitycheck[,1],matchspecies)
+matchspecies2 <- matchspecies[,colSums(matchspecies == 0) <= 59,]
+qualitycheck_new <- cbind(qualitycheck[,2:11],matchspecies2)
+
+#All good
+ggplot(qualitycheck_new,aes(x=Hg_c, y=g__Ruminococcus.s__Ruminococcus_lactaris)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+ggplot(qualitycheck_new,aes(x=Hg_c, y=g__Ruminococcus.s__Ruminococcus_lactaris_1)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+ggplot(qualitycheck_new,aes(x=Hg_c, y=g__Bacteroides.s__Bacteroides_vulgatus)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+sigHg_species <- c("g__Ruminococcus.s__Ruminococcus_lactaris","g__Ruminococcus.s__Ruminococcus_lactaris_1","g__Bacteroides.s__Bacteroides_vulgatus") %>% as.data.frame()
+colnames(sigHg_species) <- "gene"
+
+Hg_sigfinal <- match_df(Hg_alltable,sigHg_species,on ="gene")
+Hg_sigfinal <- Hg_sigfinal %>% select(metadata,protein,gene,coef,stderr,pval,correctedq_Hg)%>% dplyr::rename(qval=correctedq_Hg)
+write.csv(Hg_sigfinal,file="Hg_cc_species_sig.csv")
+
+```
+
+#Pb_cc
+```{r}
+Pbprocessing <- Pb %>% separate(col = "V1", into = c("protein", "gene"), sep = "\\|")
+Pbprocessing <- Pbprocessing[complete.cases(Pbprocessing[ , 1:2]),]
+Pbprocessing <- Pbprocessing[-2,]
+
+rownames(Pbprocessing) <- Pbprocessing$gene
+Pbprocessing_new <- Pbprocessing[,-c(1:2)]
+Pbprocessing_new <- t(Pbprocessing_new)
+
+FUNC <- lapply(list.files(pattern = "*humann_pathway_relab.tsv"), function(i){read_tsv(i)}) 
+IDS <- lapply(FUNC,function(x) substring(names(x),1,regexpr("_dehost_Abundance",names(x))-1))
+IDS <- unlist(IDS)[-1]
+rownames(Pbprocessing_new) <- IDS
+Pbprocessing_new <- Pbprocessing_new %>% as.data.frame()
+Pbprocessing_new$IDS <- IDS
+
+Pb_stat <- Pb_stat%>% dplyr::rename(protein=feature)
+metadata$IDS <- as.character(metadata$IDS)
+Pb_alltable <- join(Pb_stat,Pbprocessing, match ="all")
+Pb_alltable <- Pb_alltable[complete.cases(Pb_alltable[ ,10:11]),]
+
+association_species <- Pb_alltable[,11:96]
+association_species_media <- association_species[,-1]
+colnames(association_species_media) <- IDS
+genus <- association_species[,1]
+association_species <- cbind(genus,association_species_media)
+ROWS <- colnames(association_species)
+association_species <- rbind(ROWS,association_species)
+association_species <- t(association_species)
+
+rownames(association_species) <- NULL
+colnames(association_species) <- NULL
+colnames(association_species) <- association_species[1,]
+association_species <- association_species[-1,]
+association_species <- association_species %>% as.data.frame()
+association_species$g__Lachnospiraceae_unclassified.s__Eubacterium_rectale <- as.numeric(association_species$g__Lachnospiraceae_unclassified.s__Eubacterium_rectale)
+
+qualitycheck <- join(metadata,association_species,match ="all")
+matchspecies <- qualitycheck[,12]
+matchspecies <- cbind(qualitycheck[,1],matchspecies)
+matchspecies <- matchspecies %>% as.data.frame()
+matchspecies$matchspecies <- as.numeric(matchspecies$matchspecies)
+matchspecies2 <- matchspecies[,colSums(matchspecies == 0) <= 59,]
+
+#okay
+ggplot(qualitycheck,aes(x=Pb_c, y=g__Lachnospiraceae_unclassified.s__Eubacterium_rectale)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+sigCd_species <- "g__Lachnospiraceae_unclassified.s__Eubacterium_rectale"
+Pb_sigfinal <- Pb_alltable %>% select(metadata,protein,gene,coef,stderr,pval,correctedq_Pb)%>% dplyr::rename(qval=correctedq_Pb)
+write.csv(Pb_sigfinal, file="Pb_cc_species_sig.csv")
+```
+
+#Cd_cc
+```{r}
+### 11 unique significant species###
+Cdprocessing <- Cd %>% separate(col = "V1", into = c("protein", "gene"), sep = "\\|")
+Cdprocessing <- Cdprocessing[complete.cases(Cdprocessing[ , 1:2]),]
+exposure_Cd <- c(rep("Cd_cc", 93))
+Cdprocessing$exposure_Cd <- exposure_Cd
+Cd_stat <- Cd_stat %>% dplyr::rename(protein=feature)
+
+Cd_alltable <- join(Cd_stat,Cdprocessing, match ="all")
+Cd_alltable <- Cd_alltable[complete.cases(Cd_alltable[ ,11:12]),]
+
+FUNC <- lapply(list.files(pattern = "*humann_pathway_relab.tsv"), function(i){read_tsv(i)}) 
+IDS <- lapply(FUNC,function(x) substring(names(x),1,regexpr("_dehost_Abundance",names(x))-1))
+IDS <- unlist(IDS)[-1]
+
+association_species <- Cd_alltable[,12:98]
+association_species_media <- association_species[,-1]
+colnames(association_species_media) <- IDS
+genus <- association_species[,1]
+association_species <- cbind(genus,association_species_media)
+
+ROWS <- colnames(association_species)
+association_species <- rbind(ROWS,association_species)
+association_species <- t(association_species)
+
+rownames(association_species) <- NULL
+colnames(association_species) <- NULL
+colnames(association_species) <- association_species[1,]
+
+association_species <- t(association_species)
+association_species <- association_species %>% as.data.frame()
+association_species$V1<- make.unique(as.character(association_species$V1), sep = "_")
+association_species <- t(association_species)
+
+association_species <- association_species[-1,]
+association_species <- association_species %>% as.data.frame()
+
+
+qualitycheck <- join(metadata,association_species,match ="all")
+matchspecies <- qualitycheck[,12:104]
+matchspecies <- cbind(qualitycheck[,1],matchspecies)
+
+
+matchspecies <- lapply(matchspecies, function(x) as.numeric(as.character(x)))
+matchspecies <- matchspecies %>% as.data.frame()
+matchspecies2 <- matchspecies[,colSums(matchspecies == 0) <= 59,]
+qualitycheck_new <- cbind(qualitycheck[,2:11],matchspecies2)
+
+#11 species in total significant from increase Cd exposure!
+#check scatterplot to see if the association is reasonable. 
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bacteroides.s__Bacteroides_uniformis)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bifidobacterium.s__Bifidobacterium_adolescentis.1)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#NO#removed from 10%
+#ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bacteroides.s__Bacteroides_fragilis.3)) +
+  #geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  #geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Parabacteroides.s__Parabacteroides_merdae)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bacteroides.s__Bacteroides_vulgatus)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#No#removed from 10%
+# ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bifidobacterium.s__Bifidobacterium_bifidum)) +
+#   geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+#   geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Agathobaculum.s__Agathobaculum_butyriciproducens)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#NO#
+# ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bacteroides.s__Bacteroides_dorei)) +
+#   geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+#   geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+# #no#removed from 10%
+# ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bacteroides.s__Bacteroides_intestinalis.3)) +
+#   geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+#   geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay!#one from removed from 10% others are fine
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Parabacteroides.s__Parabacteroides_distasonis.4))+
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bifidobacterium.s__Bifidobacterium_pseudocatenulatum)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bacteroides.s__Bacteroides_ovatus)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bacteroides.s__Bacteroides_thetaiotaomicron)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+# #no#rmoved from 10%
+# ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Parabacteroides.s__Parabacteroides_johnsonii.2)) +
+#   geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+#   geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay#
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bifidobacterium.s__Bifidobacterium_longum)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+# #no# removed from 10%
+# ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Bacteroides.s__Bacteroides_plebeius.2)) +
+#   geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+#   geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+#okay#one removed, others are okay.
+ggplot(qualitycheck_new,aes(x=Cd_c, y=g__Flavonifractor.s__Flavonifractor_plautii.1)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+sigCd_species <- c("g__Bacteroides.s__Bacteroides_uniformis","g__Bifidobacterium.s__Bifidobacterium_adolescentis","g__Parabacteroides.s__Parabacteroides_merdae","g__Bacteroides.s__Bacteroides_vulgatus","g__Agathobaculum.s__Agathobaculum_butyriciproducens","g__Parabacteroides.s__Parabacteroides_distasonis","g__Bifidobacterium.s__Bifidobacterium_pseudocatenulatum","g__Bacteroides.s__Bacteroides_ovatus","g__Bacteroides.s__Bacteroides_thetaiotaomicron","g__Bifidobacterium.s__Bifidobacterium_longum","g__Flavonifractor.s__Flavonifractor_plautii") %>% as.data.frame()
+
+colnames(sigCd_species) <- "gene"
+
+Cd_sigfinal <- match_df(Cd_alltable,sigCd_species,on ="gene")
+Cd_sigfinal <- Cd_sigfinal %>% select(metadata,protein,gene,coef,stderr,pval,correctedq_Cd) %>% dplyr::rename(qval=correctedq_Cd)
+write.csv(Cd_sigfinal, file="Cd_cc_species_sig.csv")
+
+```
+
+
+#perinatal exposure-child microbiome
+#load files
+#must run, clean up the environment for the different exposure set
+```{r}
+rm(list=ls())
+#no sig Se
+#no sig Cd
+Hg <- read.table(file = 'sig_mc_out/Hg_sig_species_cc.tsv', sep = '', header = FALSE)
+Pb <- read.table(file = 'sig_mc_out/Pb_sig_species_cc.tsv', sep = '', header = FALSE)
+Mn <- read.table(file = 'sig_mc_out/Mn_sig_species_cc.tsv', sep = '', header = FALSE)
+metadata <- read.table(file = 'sig_mc_out/input_metadata_phy_mc.tsv', sep = '\t', header = TRUE)
+metadata_Pb <- read.table(file = 'sig_mc_out/input_metadata_Pb_mc.tsv', sep = '\t', header = TRUE)
+Hg_stat <- read.table(file='sig_mc_out/FDRq_Hgsig.tsv', sep='',header = TRUE)
+Pb_stat <- read.table(file='sig_mc_out/FDRq_Pbsig.tsv', sep='',header = TRUE)
+Mn_stat <- read.table(file='sig_mc_out/FDRq_Mnsig.tsv', sep='',header = TRUE)
+```
+
+#RAW DATA SIGNIFICANT, AFTER FILETER, NO MORE SIGNIFICANCY
+#Hg_mc,no
+```{r}
+Hg <- Hg[!grepl("unclassified", Hg$V1),]
+#unfortunately, all significant associations from Hg is unclassified. 
+Hgprocessing <- Hg %>% separate(col = "V1", into = c("protein", "gene"), sep = "\\|")
+Hgprocessing <- Hgprocessing[complete.cases(Hgprocessing[ , 1:2]),]
+Hgprocessing$gene<- make.unique(as.character(Hgprocessing$gene), sep = "_")
+
+
+rownames(Hgprocessing) <- Hgprocessing$gene
+Hgprocessing_new <- Hgprocessing[,-c(1:2)]
+Hgprocessing_new <- t(Hgprocessing_new)
+
+FUNC <- lapply(list.files(pattern = "*humann_pathway_relab.tsv"), function(i){read_tsv(i)}) 
+IDS <- lapply(FUNC,function(x) substring(names(x),1,regexpr("_dehost_Abundance",names(x))-1))
+IDS <- unlist(IDS)[-1]
+rownames(Hgprocessing_new) <- IDS
+Hgprocessing_new <- Hgprocessing_new %>% as.data.frame()
+Hgprocessing_new$IDS <- IDS
+
+metadata <- metadata %>% dplyr::rename(IDS=ID) 
+Hg_stat <- Hg_stat%>% dplyr::rename(protein=feature)
+metadata$IDS <- as.character(metadata$IDS)
+Hg_alltable <- join(Hg_stat,Hgprocessing, match ="all")
+Hg_alltable <- Hg_alltable[complete.cases(Hg_alltable[ ,10:11]),]
+
+association_species <- Hg_alltable[,11:96]
+association_species_media <- association_species[,-1]
+colnames(association_species_media) <- IDS
+genus <- association_species[,1]
+association_species <- cbind(genus,association_species_media)
+ROWS <- colnames(association_species)
+association_species <- rbind(ROWS,association_species)
+association_species <- t(association_species)
+
+rownames(association_species) <- NULL
+colnames(association_species) <- NULL
+colnames(association_species) <- association_species[1,]
+association_species <- association_species[-1,]
+metadata <- metadata %>% dplyr::rename(genus=IDS)
+association_species <- association_species %>% as.data.frame()
+association_species[,2:3] <- lapply(association_species[,2:3], function(x) as.numeric(as.character(x)))
+
+qualitycheck <- join(metadata,association_species,match ="all")
+matchspecies <- qualitycheck[,12:16]
+matchspecies <- cbind(qualitycheck[,1],matchspecies)
+matchspecies2 <- matchspecies[,colSums(matchspecies == 0) <= 62,]
+qualitycheck_new <- cbind(qualitycheck[,2:11],matchspecies2)
+
+#All good
+ggplot(qualitycheck_new,aes(x=Hg_D_c, y=g__Faecalibacterium.s__Faecalibacterium_prausnitzii)) +
+  geom_point() + geom_rug()+geom_smooth(method=lm, se=FALSE)+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()
+
+sigHg_species <- c("g__Faecalibacterium.s__Faecalibacterium_prausnitzii") %>% as.data.frame()
+colnames(sigHg_species) <- "gene"
+
+Hg_sigfinal <- match_df(Hg_alltable,sigHg_species,on ="gene")
+Hg_sigfinal <- Hg_sigfinal %>% select(metadata,protein,gene,coef,stderr,pval,correctedq_Hg)%>% dplyr::rename(qval=correctedq_Hg)
+write.csv(Hg_sigfinal,file="Hg_mc_species_sig.csv")
+```
+
+#Pb_mc,no, did not pass 10% threshold
+```{r}
+Pb <- Pb[!grepl("unclassified", Pb$V1),]
+#all significant association from Pb was unclassified
+Pbprocessing <- Pb %>% separate(col = "V1", into = c("protein", "gene"), sep = "\\|")
+Pbprocessing <- Pbprocessing[complete.cases(Pbprocessing[ , 1:2]),]
+Pbprocessing <- Pbprocessing[-2,]
+
+rownames(Pbprocessing) <- Pbprocessing$gene
+Pbprocessing_new <- Pbprocessing[,-c(1:2)]
+Pbprocessing_new <- t(Pbprocessing_new)
+
+FUNC <- lapply(list.files(pattern = "*humann_pathway_relab.tsv"), function(i){read_tsv(i)}) 
+IDS <- lapply(FUNC,function(x) substring(names(x),1,regexpr("_dehost_Abundance",names(x))-1))
+IDS <- unlist(IDS)[-1]
+rownames(Pbprocessing_new) <- IDS
+Pbprocessing_new <- Pbprocessing_new %>% as.data.frame()
+Pbprocessing_new$IDS <- IDS
+
+metadata <- metadata %>% dplyr::rename(IDS=genus) 
+Pb_stat <- Pb_stat%>% dplyr::rename(protein=feature)
+metadata$IDS <- as.character(metadata$IDS)
+Pb_alltable <- join(Pb_stat,Pbprocessing, match ="all")
+Pb_alltable <- Pb_alltable[complete.cases(Pb_alltable[ ,10:11]),]
+
+association_species <- Pb_alltable[,11:96]
+association_species_media <- association_species[,-1]
+colnames(association_species_media) <- IDS
+genus <- association_species[,1]
+association_species <- cbind(genus,association_species_media)
+ROWS <- colnames(association_species)
+association_species <- rbind(ROWS,association_species)
+association_species <- t(association_species)
+
+rownames(association_species) <- NULL
+colnames(association_species) <- NULL
+colnames(association_species) <- association_species[1,]
+association_species <- association_species[-1,]
+metadata <- metadata %>% dplyr::rename(genus=IDS)
+############DID NOT PASS 10% FILTER
+
+#write.csv(Pb_sigfinal, file="Pb_cc_species_sig.csv")
+```
+
+#Mn_mc,no, did not pass 10%thresheld
+```{r}
+#didn't pass 10% threshold
+Mn <- Mn[!grepl("unclassified", Mn$V1),]
+Mnprocessing <- Mn %>% separate(col = "V1", into = c("protein", "gene"), sep = "\\|")
+Mnprocessing <- Mnprocessing[complete.cases(Mnprocessing[ , 1:2]),]
+Mnprocessing <- Mnprocessing[-2,]
+
+rownames(Mnprocessing) <- Mnprocessing$gene
+Mnprocessing_new <- Mnprocessing[,-c(1:2)]
+Mnprocessing_new <- t(Mnprocessing_new)
+
+FUNC <- lapply(list.files(pattern = "*humann_pathway_relab.tsv"), function(i){read_tsv(i)}) 
+IDS <- lapply(FUNC,function(x) substring(names(x),1,regexpr("_dehost_Abundance",names(x))-1))
+IDS <- unlist(IDS)[-1]
+rownames(Mnprocessing_new) <- IDS
+Mnprocessing_new <- Mnprocessing_new %>% as.data.frame()
+Mnprocessing_new$IDS <- IDS
+
+metadata <- metadata %>% dplyr::rename(IDS=genus) 
+Mn_stat <- Mn_stat%>% dplyr::rename(protein=feature)
+metadata$IDS <- as.character(metadata$IDS)
+Mn_alltable <- join(Mn_stat,Mnprocessing, match ="all")
+Mn_alltable <- Mn_alltable[complete.cases(Mn_alltable[ ,10:11]),]
+
+association_species <- Mn_alltable[,11:96]
+association_species_media <- association_species[,-1]
+colnames(association_species_media) <- IDS
+genus <- association_species[,1]
+association_species <- cbind(genus,association_species_media)
+ROWS <- colnames(association_species)
+association_species <- rbind(ROWS,association_species)
+association_species <- t(association_species)
+
+rownames(association_species) <- NULL
+colnames(association_species) <- NULL
+colnames(association_species) <- association_species[1,]
+association_species <- association_species[-1,]
+metadata <- metadata %>% dplyr::rename(genus=IDS)
+association_species <- association_species %>% as.data.frame()
+association_species$g__Flavonifractor.s__Flavonifractor_plautii <- as.numeric(association_species$g__Flavonifractor.s__Flavonifractor_plautii)
+
+qualitycheck <- join(metadata,association_species,match ="all")
+matchspecies <- qualitycheck[,15]
+matchspecies <- cbind(qualitycheck[,1],matchspecies)
+matchspecies <- matchspecies %>% as.data.frame()
+matchspecies$matchspecies <- as.numeric(matchspecies$matchspecies)
+matchspecies2 <- matchspecies[,colSums(matchspecies == 0) <= 62,]
+matchspecies2 <- matchspecies2 %>% as.data.frame()
+
+######!!didn't pass 10% threshold.
+```
+
+
+#Summary, Table S12
+```{r}
+Cd <- read.csv("Cd_cc_species_sig.csv")
+Hg <- read.csv("Hg_cc_species_sig.csv")
+Pb <- read.csv("Pb_cc_species_sig.csv")
+Hg_D <- read.csv("Hg_mc_species_sig.csv")
+
+Cdprocessing <- Cd %>% arrange(gene) %>% select(-X)
+Hgprocessing <- Hg %>% arrange(gene) %>% select(-X)
+Pbprocessing <- Pb %>% arrange(gene) %>% select(-X)
+Hgprocessing_D <- Hg_D %>% arrange(gene) %>% select(-X)
+
+species_ccpair <- rbind(Cdprocessing,Hgprocessing,Pbprocessing,Hgprocessing_D) %>% as.data.frame() 
+write.csv(species_ccpair,file="sig_species_ccpair_all_jan28.csv")
+```
+
+
