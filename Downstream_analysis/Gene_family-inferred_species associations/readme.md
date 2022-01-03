@@ -2,6 +2,6 @@ Gene family-inferred species association consists of ~530,000 gene families. The
 The scripts are very similar MaAsLin2 based association screnning, with exposures changing to different metals and metadata changing to different timepoints (i.e., perinatal & childhood)\
 Steps:
 1. Running individual R scripts in HPC
-2. Download output from HPC to local computer
+2. Download raw output from HPC to local computer
 3. Run R markdown (RMD) file for for quality control to remove false associations (i.e., non-identified species) & data cleanup
 4. Run the R script for visualization (Figure 4)
