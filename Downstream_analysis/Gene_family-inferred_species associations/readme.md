@@ -5,3 +5,5 @@ Steps:
 2. Download raw output from HPC to local computer
 3. Run R markdown (RMD) file for for quality control to remove false associations (i.e., non-identified species) & data cleanup
 4. Run the R script for visualization (Figure 4)
+
+file name: cc denotes child exposure-child microbiome; mc denotes perinatal exposure-child microbiome. All participants are de-dentified.
