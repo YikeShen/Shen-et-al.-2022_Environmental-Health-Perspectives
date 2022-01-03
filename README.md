@@ -1,5 +1,5 @@
 # Associations of childhood and perinatal blood metals with children’s gut microbiomes in a Canadian gestation cohort
-Shen et al., 2022 Environmental Health Perspectives\
+Shen et al., 2022. Environmental Health Perspectives\
 Address correspondence to: Dr. Yike Shen, Department of Environmental Health Sciences, Columbia University Mailman School of Public Health, 630 W 168th St Room 16-416, New York, NY 10032, USA.; Email: ys3419@cumc.columbia.edu 
 
 Accepted 12/02/2021
