@@ -6,7 +6,8 @@ Accepted 12/02/2021
 
 Please refer to "HPC_shell_scripts" for raw sequencing data processing using unix command and batch scripts \
 Please refer to "Downstream_analysis" for R scripts \
-All participants are de-identified
+All participants are de-identified\
+Please note: we are not allowed to share raw data, to obtain raw data and non-deidentified code, interested individuals must be approved by GESTE cohort. Please email me to introduce you to GESTE cohort. 
 
 Update: 01/02/2022, repository is currently being updated. 
 
