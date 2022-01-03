@@ -1,5 +1,10 @@
 Downstream analysis in R
 
+Disclaimer:\
+You can not run this script without metadata, this aims to provide the workflow of our paper and offer pseudo code example for analysis.\
+Request for data must go through approval with GESTE cohort, after approval I can share the original scripts with participants name and input processed sequence data.\
+All participant names are de-identified as "PARTICIPANT_ID"; All name of the inputsheets are redacted as "INPUTDATA.csv"\
+
 Code file #1 :EHP_Shen_childexposure_childmicrobiome_1.Rmd \
 includes:
 - child exposure-child microbiome
