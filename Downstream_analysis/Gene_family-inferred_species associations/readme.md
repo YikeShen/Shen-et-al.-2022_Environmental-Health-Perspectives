@@ -1,0 +1,1 @@
+Gene family-inferred species association consists of ~530,000 gene families. Therefore, R script for each metal runs over 15 hours. It is highly suggested to run in high performance computing clusters (HPC)
