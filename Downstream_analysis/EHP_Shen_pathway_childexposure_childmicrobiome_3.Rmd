@@ -1,0 +1,248 @@
+---
+title: "EHP Shen Child Exposure-Child Microbiome_pathway analysis"
+author: "Yike Shen"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+## Readme:
+#You can not run this script without metadata, this aims to provide the workflow of our paper and offer pseudo code example for analysis. 
+# Request for data must go through approval with GESTE cohort, after approval I can share the original scripts with participants name and input processed sequence data. 
+#All participant names are de-identified as "PARTICIPANT_ID"; All name of the inputsheets are redacted as "INPUTDATA.csv"
+## End
+
+#This is pathway analysis for shotgun metagenome data For Child Exposure-Child Microbiome
+
+#Housekeeping
+```{r}
+rm(list=ls())
+library("Maaslin2")
+library(readxl)
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(useful)
+```
+
+setwd("/Users/yikeshen/Desktop/metagenome")
+
+#metadata preprocessing
+```{r}
+GESTERAW <- read.csv("$path/GESTEY6RAW.csv")
+ChildMetalRaw <- GESTERAW[,1:6]
+
+#more covariates from the other datasheet
+Covariates <- read.csv("$path/Mothercovariates.csv")
+Childrencovariates <- Covariates[,c(1:14,198)]
+Childrencovariates <- Childrencovariates[-1,-1]
+Childrencovariates <- Childrencovariates %>% dplyr::rename(medication_c=medication)
+GESTERAWwcovaraites <- cbind(GESTERAW,Childrencovariates)
+
+Socio <- GESTERAWwcovaraites %>% select(record_id,cadmium,manganese,mercury,lead, selenium,child_age,sexe_enfan,revenufami,ecolespeci,allaite,proxim_ind,ant_ch_bmi_imp,medication_c,ga_wks_bb)
+
+Socioprocessing <- Socio[complete.cases(Socio[ , 2:6]),]
+Socioprocessing <- Socioprocessing[,-c(2:6)]
+row.names(Socioprocessing) <- Socioprocessing$record_id
+Socioprocessing <- Socioprocessing %>% as.tibble() %>%
+  dplyr::rename(Sex=sexe_enfan) %>% 
+  dplyr::rename(Special_school=ecolespeci) %>% 
+  dplyr::rename(Breastfeed=allaite) %>% 
+  dplyr::rename(Family_income_Y6=revenufami) %>% 
+  dplyr::rename(Children_age=child_age) %>% 
+  dplyr::rename(Proximity_industry=proxim_ind) %>% 
+  dplyr::rename(Gestational_age=ga_wks_bb)
+
+Socioprocessing$ant_ch_bmi_imp <- as.numeric(Socioprocessing$ant_ch_bmi_imp)
+Socioprocessing$medication_c <- as.numeric(Socioprocessing$medication_c)
+Socioprocessing[54,4] <- NUMBER #PARTICIPANT_ID, family income NUMBER at delivery
+Socioprocessing[45,4] <- NUMBER #PARTICIPANT_ID,family income NUMBER at delivery
+
+write.csv(Socioprocessing, file = "forincomeimpute.csv")
+
+map <- read_excel("$path/GESTE_OTU.xlsx", sheet = "ENV_Children")
+SAMPLEIDROWNAMES <- map$SampleID
+map <- map %>% as.matrix()
+row.names(map) <- SAMPLEIDROWNAMES
+map <- map[,c(-1,-7)]
+ROANAMESLISTSAMPLESID <- row.names(map)
+map <- map %>% as.data.frame()
+
+Correlationscreening <- cbind(map,Socioprocessing)
+Correlationscreening <- Correlationscreening %>% select(-record_id)
+Correlationscreening <- Correlationscreening %>% as.matrix()
+
+dataframewithcovariates <- Correlationscreening %>%as.data.frame() %>%  select(Cd_c,Mn_c,Hg_c,Pb_c,Se_c,Breastfeed,Gestational_age,Family_income_Y6,Sex)
+
+dataframewithcovariates$Sex[Socioprocessing$Sex == "1"] <- 'Female'
+dataframewithcovariates$Sex[Socioprocessing$Sex == "2"] <- 'Male'
+
+ataframewithcovariates$Breastfeed[dataframewithcovariates$Breastfeed == "1"] <- 'Yes'
+dataframewithcovariates$Breastfeed[dataframewithcovariates$Breastfeed == "0"] <- 'No'
+
+dataframewithcovariates[,1:5] <- lapply(dataframewithcovariates[,1:5], function(x) as.numeric(as.character(x)))
+dataframewithcovariates$Family_income_Y6 <- as.numeric(dataframewithcovariates$Family_income_Y6)
+dataframewithcovariates$Gestational_age <- as.numeric(dataframewithcovariates$Gestational_age)
+```
+
+
+#preprocessing, pathway
+```{r}
+FUNC <- lapply(list.files(pattern = "*humann_pathway_relab.tsv"), function(i){read_tsv(i)}) 
+
+IDS <- lapply(FUNC,function(x) substring(names(x),1,regexpr("_dehost_Abundance",names(x))-1))
+IDS <- unlist(IDS)[-1]
+
+FUNC <- lapply(FUNC, function(x)
+  separate(data = x, col = "# Pathway", into = c("Pathway", "Taxon"), sep = "\\|"))
+FUNC <- lapply(FUNC, subset, is.na(Taxon))
+
+FUNC <- FUNC %>%
+  reduce(full_join, by = "Pathway")
+FUNC <- FUNC[,which(!grepl("Taxon", colnames(FUNC)))] 
+
+colnames(FUNC)[2:ncol(FUNC)] <- IDS
+Pathways <- FUNC$Pathway
+names(Pathways) <- ifelse(grepl(":", Pathways), substring(Pathways,1,regexpr(":",Pathways)-1), Pathways)
+FUNC <- FUNC[,-1]
+FUNC <- as.data.frame(t(FUNC))
+FUNC[is.na(FUNC)] <- 0
+colnames(FUNC) <- names(Pathways)
+```
+
+#preprocessing, merge metadata and functional pathway
+```{r}
+MATCHING <- rownames(dataframewithcovariates) %>% as.data.frame()
+colnames(MATCHING) <- "ID"
+MATCHING <- cbind(MATCHING,dataframewithcovariates)
+
+FUNCMATCHING <- rownames(FUNC) %>% as.data.frame()
+colnames(FUNCMATCHING) <- "ID"
+FUNCXX <- cbind(FUNCMATCHING,FUNC)
+
+#Matching missing samples
+FUNCXX <- match_df(FUNCXX, MATCHING, on ="ID")
+MATCHING <- match_df(MATCHING,FUNCXX, on ="ID")
+
+FUNCXX <- FUNCXX[,colSums(FUNCXX == 0) <= 59]
+
+input_metadata_phy <- MATCHING %>% as.data.frame()
+input_data_phy <- FUNCXX %>% as.data.frame()
+rownames(input_metadata_phy) <- rownames(input_data_phy)
+input_data_phy <- input_data_phy[,-1]
+
+input_metadata_phy_PbHg <- input_metadata_phy
+input_data_phy_PbHg <- input_data_phy
+
+#outlier removed, high metal concentration in accordance with taxa screen.Cd,Se,Mn
+input_metadata_phy <- input_metadata_phy[!(row.names(input_metadata_phy) %in% "PARTICIPANT_ID"), ]
+input_data_phy <- input_data_phy[!(row.names(input_data_phy) %in% "PARTICIPANT_ID"), ]
+
+```
+
+#pathway association
+```{r}
+#Cd
+fit_data1 = Maaslin2(
+    input_data = input_data_phy,
+    input_metadata = input_metadata_phy,
+    output = "masslin_pathway_Cd",
+    fixed_effects = c("Cd_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Cd <- read.table(file="./masslin_pathway_Cd/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Cd <- FDRq_Cd[which(FDRq_Cd$metadata=='Cd_c', ),]
+correctedq_Cd <- p.adjust(FDRq_Cd$pval, method = "fdr")
+FDRq_Cd <- cbind(FDRq_Cd,correctedq_Cd)
+
+#Mn
+fit_data2 = Maaslin2(
+    input_data = input_data_phy,
+    input_metadata = input_metadata_phy,
+    output = "masslin_pathway_Mn",
+    fixed_effects = c("Mn_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Mn <- read.table(file="./masslin_pathway_Mn/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Mn <- FDRq_Mn[which(FDRq_Mn$metadata=='Mn_c', ),]
+correctedq_Mn <- p.adjust(FDRq_Mn$pval, method = "fdr")
+FDRq_Mn <- cbind(FDRq_Mn,correctedq_Mn)
+
+#Hg
+fit_data3 = Maaslin2(
+    input_data = input_data_phy_PbHg,
+    input_metadata = input_metadata_phy_PbHg,
+    output = "masslin_pathway_Hg",
+    fixed_effects = c("Hg_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Hg <- read.table(file="./masslin_pathway_Hg/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Hg <- FDRq_Hg[which(FDRq_Hg$metadata=='Hg_c', ),]
+correctedq_Hg <- p.adjust(FDRq_Hg$pval, method = "fdr")
+FDRq_Hg <- cbind(FDRq_Hg,correctedq_Hg)
+
+#Pb,
+#P161.PWY: P161-PWY: acetylene degradation
+#PWY4LZ.257: PWY4LZ-257: superpathway of fermentation (Chlamydomonas reinhardtii)
+fit_data4 = Maaslin2(
+    input_data = input_data_phy_PbHg,
+    input_metadata = input_metadata_phy_PbHg,
+    output = "masslin_pathway_Pb",
+    fixed_effects = c("Pb_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Pb <- read.table(file="./masslin_pathway_Pb/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Pb <- FDRq_Pb[which(FDRq_Pb$metadata=='Pb_c', ),]
+correctedq_Pb <- p.adjust(FDRq_Pb$pval, method = "fdr")
+FDRq_Pb <- cbind(FDRq_Pb,correctedq_Pb)
+
+#Se
+fit_data5 = Maaslin2(
+    input_data = input_data_phy,
+    input_metadata = input_metadata_phy,
+    output = "masslin_pathway_Se",
+    fixed_effects = c("Se_c","Breastfeed","Gestational_age","Family_income_Y6","Sex"))
+FDRq_Se <- read.table(file="./masslin_pathway_Se/all_results.tsv",sep = '\t', header = TRUE)
+FDRq_Se <- FDRq_Se[which(FDRq_Se$metadata=='Se_c', ),]
+correctedq_Se <- p.adjust(FDRq_Se$pval, method = "fdr")
+FDRq_Se <- cbind(FDRq_Se,correctedq_Se)
+
+FDRq_Cd <- FDRq_Cd %>% dplyr::rename(FDR_qval=correctedq_Cd)
+FDRq_Mn <- FDRq_Mn %>% dplyr::rename(FDR_qval=correctedq_Mn)
+FDRq_Hg <- FDRq_Hg %>% dplyr::rename(FDR_qval=correctedq_Hg)
+FDRq_Pb <- FDRq_Pb %>% dplyr::rename(FDR_qval=correctedq_Pb)
+FDRq_Se <- FDRq_Se %>% dplyr::rename(FDR_qval=correctedq_Se)
+
+Allassociationspathway <- rbind(FDRq_Cd,FDRq_Mn,FDRq_Hg,FDRq_Pb,FDRq_Se)
+Allassociationspathway <- Allassociationspathway %>% select(metadata, feature, coef,stderr,pval,FDR_qval)
+Allassociationspathway[,3:6] <- Allassociationspathway[,3:6] %>% round(3)
+
+write.csv(Allassociationspathway,"associationspathway_cc.csv")
+
+```
+
+#plot association, evaluation, Figure S1
+```{r}
+Stats_ccpair_phylum <- FDRq_Pb[1:2,]
+pathwayfullname <- c("acetylene degradation","superpathway of fermentation (Chlamydomonas reinhardtii)")
+Stats_ccpair_phylum <- cbind(Stats_ccpair_phylum,pathwayfullname)
+clean_ccpair_stat <- Stats_ccpair_phylum %>% select(metadata,feature,pathwayfullname,value,coef,pval,FDR_qval)
+
+P161.PWY <- input_data_phy %>% select("P161-PWY")
+PWY4LZ.257 <- input_data_phy %>% select("PWY4LZ-257")
+Pb_maasline <- input_metadata_phy %>% select("Pb_c")
+pathwaydf <- cbind(P161.PWY,PWY4LZ.257,Pb_maasline) %>% as.data.frame()
+pathwaydf <- cbind(pathwaydf,input_metadata_phy[,7:10])
+
+colnames(pathwaydf) <- gsub("-", "_", colnames(pathwaydf))
+
+pathwayplot1 <- ggplot(pathwaydf,aes(x=Pb_c, y=log(P161_PWY))) +
+  geom_point() + geom_rug()+
+  geom_smooth(method=lm, se=FALSE)+theme_bw()+
+  annotate(geom="text", x=0.03, y=-10, label="coef=-0.238, q value=0.100",color="red")+
+  ggtitle("Association of Acetylene degradation ~ Pb")+
+  labs(x="Chilhood Blood Lead (umol/L)", y="Acetylene Degradation Relative Abundance (log10 transformed)")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=16),
+        plot.title = element_text(size=22, hjust=0.5),
+        text = element_text(size = 16),
+        axis.text.y = element_text(face = "italic"))
+
+pathwayplot1
+write.csv(clean_ccpair_stat,"pathway_childrenchildrenpair.csv")
+
+```
+
