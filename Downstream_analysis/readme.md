@@ -10,3 +10,15 @@ includes:
 - taxa (phylum & family association) (16S rRNA gene amplicon sequencing)
 - metaphlan species association (shotgun metagenome sequencing)
 - alpha diveristy sensitivity analysis (16S rRNA gene amplicon sequencing)
+
+
+Code file #2 :EHP_Shen_perinatalexposure_childmicrobiome_2.Rmd \
+includes:
+- Perinatal exposure-children microbiome
+- data clean up
+- summary statistics
+- alpha diversity (16S rRNA gene amplicon sequencing)
+- alpha diveristy sensitivity analysis (16S rRNA gene amplicon sequencing)
+- beta diversity (16S rRNA gene amplicon sequencing)
+- taxa (phylum & family association) (16S rRNA gene amplicon sequencing)
+- metaphlan species association (shotgun metagenome sequencing)
