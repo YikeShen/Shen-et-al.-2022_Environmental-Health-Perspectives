@@ -4,6 +4,6 @@ Steps:
 1. Running individual R scripts in HPC
 2. Download raw output from HPC to local computer
 3. Run R markdown (EHP_Shen_gene family-inferred species_5.Rmd) file for for quality control to remove false associations (i.e., non-identified species, less than 10% species present, and fitness of associations) & data cleanup
-4. Run the R script for visualization (Figure 4)
+4. Run the R script (EHP_Shen_Figure4.R) for visualization (Figure 4)
 
 file name: cc denotes child exposure-child microbiome; mc denotes perinatal exposure-child microbiome. All participants are de-dentified.
