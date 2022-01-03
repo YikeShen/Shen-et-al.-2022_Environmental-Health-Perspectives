@@ -9,6 +9,6 @@ Please refer to "Downstream_analysis" for R scripts \
 All participants are de-identified\
 Please note: we are not allowed to share metadata and raw sequencing data, to obtain data and non-deidentified code, interested individuals must be approved by GESTE cohort. Please email me to introduce you to GESTE cohort. 
 
-Update: 01/02/2022, repository is currently being updated. 
+01/03/2022, repository updated completed
 
 
